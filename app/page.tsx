@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import Image from "next/image";
 import { auth } from "@/auth";
 import { SignOutButton } from "@/components/auth-buttons";
+import { HomeContent } from "@/components/home-content";
 
 export default async function Home() {
   const session = await auth();
@@ -52,37 +53,7 @@ export default async function Home() {
               </p>
             </div>
 
-            {/* Placeholder for scheduled workflows */}
-            <div className="rounded-xl border border-zinc-200 bg-white p-8 dark:border-zinc-800 dark:bg-zinc-900">
-              <div className="flex flex-col items-center gap-4 text-center">
-                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-zinc-100 dark:bg-zinc-800">
-                  <svg
-                    className="h-6 w-6 text-zinc-400"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <h3 className="font-medium text-zinc-900 dark:text-white">
-                    No scheduled workflows
-                  </h3>
-                  <p className="text-sm text-zinc-500 dark:text-zinc-500">
-                    Create your first scheduled workflow to get started.
-                  </p>
-                </div>
-                <button className="mt-2 flex h-10 items-center justify-center rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white transition-colors hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100">
-                  Schedule a workflow
-                </button>
-              </div>
-            </div>
+            <HomeContent />
           </div>
         </div>
       </main>
