@@ -1,7 +1,11 @@
 "use server";
 
 import { auth } from "@/auth";
-import type { GitHubRepository, GitHubContent, WorkflowFile } from "@/lib/github/types";
+import type {
+  GitHubRepository,
+  GitHubContent,
+  WorkflowFile,
+} from "@/lib/github/types";
 
 export interface WorkflowDispatchResult {
   success: boolean;
@@ -22,7 +26,7 @@ export async function fetchRepositories(): Promise<GitHubRepository[]> {
         Authorization: `Bearer ${session.accessToken}`,
         Accept: "application/vnd.github.v3+json",
       },
-    }
+    },
   );
 
   if (!response.ok) {
@@ -34,7 +38,7 @@ export async function fetchRepositories(): Promise<GitHubRepository[]> {
 
 export async function fetchWorkflows(
   owner: string,
-  repo: string
+  repo: string,
 ): Promise<WorkflowFile[]> {
   const session = await auth();
 
@@ -49,7 +53,7 @@ export async function fetchWorkflows(
         Authorization: `Bearer ${session.accessToken}`,
         Accept: "application/vnd.github.v3+json",
       },
-    }
+    },
   );
 
   if (!response.ok) {
@@ -65,7 +69,7 @@ export async function fetchWorkflows(
     .filter(
       (file) =>
         file.type === "file" &&
-        (file.name.endsWith(".yml") || file.name.endsWith(".yaml"))
+        (file.name.endsWith(".yml") || file.name.endsWith(".yaml")),
     )
     .map((file) => ({
       name: file.name,
@@ -78,7 +82,7 @@ export async function triggerWorkflowDispatch(
   repo: string,
   workflowPath: string,
   ref: string = "main",
-  inputs?: Record<string, string>
+  inputs?: Record<string, string>,
 ): Promise<WorkflowDispatchResult> {
   const session = await auth();
 
@@ -92,18 +96,29 @@ export async function triggerWorkflowDispatch(
     repo,
     workflowPath,
     ref,
-    inputs
+    inputs,
   );
 }
 
 // Internal function that accepts token directly (for cron job use)
+/**
+ * Sends a POST API Request to GitHub for Dispatch Workflow to Run
+ *
+ * @param accessToken Access Token for GitHub
+ * @param owner Owner of the Repository
+ * @param repo Repository in GitHub to run the workflow
+ * @param workflowPath Path of the Workflow in GitHub
+ * @param ref Branch where the workflow would run
+ * @param inputs Any inputs for Dispatch Workflow
+ * @returns The status of running the API request
+ */
 export async function triggerWorkflowDispatchWithToken(
   accessToken: string,
   owner: string,
   repo: string,
   workflowPath: string,
   ref: string = "main",
-  inputs?: Record<string, string>
+  inputs?: Record<string, string>,
 ): Promise<WorkflowDispatchResult> {
   try {
     // Extract workflow file name from path
@@ -122,12 +137,14 @@ export async function triggerWorkflowDispatchWithToken(
           ref,
           inputs: inputs ?? {},
         }),
-      }
+      },
     );
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`Workflow dispatch failed: ${response.status} - ${errorText}`);
+      console.error(
+        `Workflow dispatch failed: ${response.status} - ${errorText}`,
+      );
       return {
         success: false,
         error: `GitHub API error: ${response.status} - ${response.statusText}`,
