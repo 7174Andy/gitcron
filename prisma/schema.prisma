@@ -1,0 +1,48 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Schedule {
+  id            String    @id @default(cuid())
+  userId        String    // GitHub user ID from session
+
+  // Repository info
+  owner         String
+  repo          String
+  repoFullName  String
+
+  // Workflow info
+  workflowName  String
+  workflowPath  String
+
+  // Optional inputs
+  environment   String?
+  ref           String    @default("main")  // Branch to run on
+
+  // Scheduling
+  scheduledAt   DateTime  // UTC timestamp
+  timezone      String    // Original timezone for display
+
+  // Execution status
+  status        String    @default("pending")  // pending, triggered, failed
+  triggeredAt   DateTime?
+  errorMessage  String?
+
+  // GitHub access token for execution (encrypted in production)
+  accessToken   String
+
+  // Metadata
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([status, scheduledAt])
+}

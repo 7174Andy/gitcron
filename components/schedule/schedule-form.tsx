@@ -10,6 +10,7 @@ import { SchedulePreview } from "./schedule-preview";
 import { Input } from "@/components/ui/input";
 import { useTimezone } from "@/lib/hooks/use-timezone";
 import { localToUTC } from "@/lib/timezone/utils";
+import { createSchedule } from "@/lib/actions/schedules";
 import type { GitHubRepository, WorkflowFile } from "@/lib/github/types";
 import type { SchedulePayload } from "@/types/schedule";
 
@@ -25,10 +26,12 @@ function isTimeInPast(date: string, time: string, timezone: string): boolean {
 
 interface ScheduleFormProps {
   onClose?: () => void;
+  onScheduleCreated?: () => void;
 }
 
-export function ScheduleForm({ onClose }: ScheduleFormProps) {
+export function ScheduleForm({ onClose, onScheduleCreated }: ScheduleFormProps) {
   const detectedTimezone = useTimezone();
+  const [error, setError] = useState<string | null>(null);
 
   const [selectedRepo, setSelectedRepo] = useState<GitHubRepository | null>(null);
   const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowFile | null>(null);
@@ -57,8 +60,9 @@ export function ScheduleForm({ onClose }: ScheduleFormProps) {
     setSelectedWorkflow(workflow);
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setError(null);
 
     if (!selectedRepo || !selectedWorkflow || !date || !time) {
       return;
@@ -84,14 +88,18 @@ export function ScheduleForm({ onClose }: ScheduleFormProps) {
         timezone,
       };
 
-      console.log("Schedule payload:", payload);
+      const result = await createSchedule({ payload });
 
-      // TODO: Save to database
-      alert("Schedule created! Check the console for details.");
+      if (!result.success) {
+        setError(result.error);
+        return;
+      }
 
+      onScheduleCreated?.();
       onClose?.();
     } catch (err) {
       console.error("Failed to create schedule:", err);
+      setError("An unexpected error occurred");
     } finally {
       setIsSubmitting(false);
     }
@@ -167,6 +175,25 @@ export function ScheduleForm({ onClose }: ScheduleFormProps) {
           </div>
         )}
       </div>
+
+      {error && (
+        <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950">
+          <svg
+            className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
+          <span className="text-sm text-red-700 dark:text-red-300">{error}</span>
+        </div>
+      )}
 
       <div className="flex justify-end gap-3 pt-2">
         {onClose && (
