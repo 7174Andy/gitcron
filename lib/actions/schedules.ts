@@ -2,6 +2,7 @@
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { encrypt } from "@/lib/crypto";
 import type { SchedulePayload } from "@/types/schedule";
 
 export interface CreateScheduleInput {
@@ -82,7 +83,7 @@ export async function createSchedule(
         inputs: payload.inputs,
         scheduledAt: new Date(payload.scheduledAt),
         timezone: payload.timezone,
-        accessToken: session.accessToken,
+        accessToken: encrypt(session.accessToken),
       },
       select: {
         id: true,

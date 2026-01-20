@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDueSchedules, updateScheduleStatus } from "@/lib/actions/schedules";
 import { triggerWorkflowDispatchWithToken } from "@/lib/actions/github";
+import { decrypt } from "@/lib/crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -52,9 +53,10 @@ export async function GET(request: Request) {
         // Get inputs from schedule (stored as JSON)
         const inputs = (schedule.inputs as Record<string, string>) || {};
 
-        // Trigger the workflow
+        // Decrypt token and trigger the workflow
+        const decryptedToken = decrypt(schedule.accessToken);
         const result = await triggerWorkflowDispatchWithToken(
-          schedule.accessToken,
+          decryptedToken,
           schedule.owner,
           schedule.repo,
           schedule.workflowPath,
