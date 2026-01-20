@@ -1,10 +1,12 @@
 "use server";
 
 import { auth } from "@/auth";
+import { parse as parseYaml } from "yaml";
 import type {
   GitHubRepository,
   GitHubContent,
   WorkflowFile,
+  WorkflowInput,
 } from "@/lib/github/types";
 
 export interface WorkflowDispatchResult {
@@ -75,6 +77,69 @@ export async function fetchWorkflows(
       name: file.name,
       path: file.path,
     }));
+}
+
+export async function fetchWorkflowInputs(
+  owner: string,
+  repo: string,
+  workflowPath: string
+): Promise<WorkflowInput[]> {
+  const session = await auth();
+
+  if (!session?.accessToken) {
+    throw new Error("Not authenticated");
+  }
+
+  try {
+    // Fetch the workflow file content
+    const response = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/contents/${workflowPath}`,
+      {
+        headers: {
+          Authorization: `Bearer ${session.accessToken}`,
+          Accept: "application/vnd.github.v3.raw",
+        },
+      }
+    );
+
+    if (!response.ok) {
+      console.error(`Failed to fetch workflow file: ${response.status}`);
+      return [];
+    }
+
+    const content = await response.text();
+    const workflow = parseYaml(content);
+
+    // Extract workflow_dispatch inputs
+    const dispatchInputs = workflow?.on?.workflow_dispatch?.inputs;
+
+    if (!dispatchInputs) {
+      return [];
+    }
+
+    // Convert to array format
+    return Object.entries(dispatchInputs).map(([name, config]) => {
+      const inputConfig = config as {
+        description?: string;
+        required?: boolean;
+        default?: string;
+        type?: string;
+        options?: string[];
+      };
+
+      return {
+        name,
+        description: inputConfig.description,
+        required: inputConfig.required ?? false,
+        default: inputConfig.default,
+        type: (inputConfig.type as WorkflowInput["type"]) || "string",
+        options: inputConfig.options,
+      };
+    });
+  } catch (error) {
+    console.error("Failed to parse workflow inputs:", error);
+    return [];
+  }
 }
 
 export async function triggerWorkflowDispatch(

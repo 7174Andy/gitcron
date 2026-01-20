@@ -71,10 +71,17 @@ function ScheduleCard({
             {formattedDate} at {formattedTime}
           </span>
         </div>
-        {schedule.environment && (
-          <span className="text-xs text-zinc-400">
-            Environment: {schedule.environment}
-          </span>
+        {Object.keys(schedule.inputs).length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {Object.entries(schedule.inputs).map(([key, value]) => (
+              <span
+                key={key}
+                className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+              >
+                {key}: {value}
+              </span>
+            ))}
+          </div>
         )}
         {schedule.errorMessage && (
           <span className="text-xs text-red-500">Error: {schedule.errorMessage}</span>

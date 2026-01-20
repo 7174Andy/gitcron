@@ -49,11 +49,8 @@ export async function GET(request: Request) {
     // Process each due schedule
     for (const schedule of dueSchedules) {
       try {
-        // Build inputs object if environment is specified
-        const inputs: Record<string, string> = {};
-        if (schedule.environment) {
-          inputs.environment = schedule.environment;
-        }
+        // Get inputs from schedule (stored as JSON)
+        const inputs = (schedule.inputs as Record<string, string>) || {};
 
         // Trigger the workflow
         const result = await triggerWorkflowDispatchWithToken(

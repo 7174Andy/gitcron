@@ -15,7 +15,7 @@ export interface ScheduleResponse {
   repoFullName: string;
   workflowName: string;
   workflowPath: string;
-  environment: string | null;
+  inputs: Record<string, string>;
   ref: string;
   scheduledAt: string;
   timezone: string;
@@ -32,7 +32,7 @@ function toScheduleResponse(schedule: {
   repoFullName: string;
   workflowName: string;
   workflowPath: string;
-  environment: string | null;
+  inputs: unknown;
   ref: string;
   scheduledAt: Date;
   timezone: string;
@@ -48,7 +48,7 @@ function toScheduleResponse(schedule: {
     repoFullName: schedule.repoFullName,
     workflowName: schedule.workflowName,
     workflowPath: schedule.workflowPath,
-    environment: schedule.environment,
+    inputs: (schedule.inputs as Record<string, string>) || {},
     ref: schedule.ref,
     scheduledAt: schedule.scheduledAt.toISOString(),
     timezone: schedule.timezone,
@@ -79,7 +79,7 @@ export async function createSchedule(
         repoFullName: payload.repository.fullName,
         workflowName: payload.workflow.name,
         workflowPath: payload.workflow.path,
-        environment: payload.environment,
+        inputs: payload.inputs,
         scheduledAt: new Date(payload.scheduledAt),
         timezone: payload.timezone,
         accessToken: session.accessToken,
@@ -91,7 +91,7 @@ export async function createSchedule(
         repoFullName: true,
         workflowName: true,
         workflowPath: true,
-        environment: true,
+        inputs: true,
         ref: true,
         scheduledAt: true,
         timezone: true,
@@ -130,7 +130,7 @@ export async function getSchedules(): Promise<
         repoFullName: true,
         workflowName: true,
         workflowPath: true,
-        environment: true,
+        inputs: true,
         ref: true,
         scheduledAt: true,
         timezone: true,

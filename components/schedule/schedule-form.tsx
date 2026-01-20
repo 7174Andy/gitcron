@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { format } from "date-fns";
 import { RepositorySelect } from "./repository-select";
 import { WorkflowSelect } from "./workflow-select";
@@ -11,7 +11,8 @@ import { Input } from "@/components/ui/input";
 import { useTimezone } from "@/lib/hooks/use-timezone";
 import { localToUTC } from "@/lib/timezone/utils";
 import { createSchedule } from "@/lib/actions/schedules";
-import type { GitHubRepository, WorkflowFile } from "@/lib/github/types";
+import { fetchWorkflowInputs } from "@/lib/actions/github";
+import type { GitHubRepository, WorkflowFile, WorkflowInput } from "@/lib/github/types";
 import type { SchedulePayload } from "@/types/schedule";
 
 function isTimeInPast(date: string, time: string, timezone: string): boolean {
@@ -35,7 +36,11 @@ export function ScheduleForm({ onClose, onScheduleCreated }: ScheduleFormProps) 
 
   const [selectedRepo, setSelectedRepo] = useState<GitHubRepository | null>(null);
   const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowFile | null>(null);
-  const [environment, setEnvironment] = useState("");
+
+  // Workflow inputs
+  const [workflowInputs, setWorkflowInputs] = useState<WorkflowInput[]>([]);
+  const [inputValues, setInputValues] = useState<Record<string, string>>({});
+  const [isLoadingInputs, setIsLoadingInputs] = useState(false);
 
   // Initialize with tomorrow's date
   const tomorrow = new Date();
@@ -51,13 +56,55 @@ export function ScheduleForm({ onClose, onScheduleCreated }: ScheduleFormProps) 
     [date, time, timezone]
   );
 
+  // Fetch workflow inputs when workflow is selected
+  useEffect(() => {
+    if (!selectedRepo || !selectedWorkflow) {
+      setWorkflowInputs([]);
+      setInputValues({});
+      return;
+    }
+
+    async function loadInputs() {
+      setIsLoadingInputs(true);
+      try {
+        const inputs = await fetchWorkflowInputs(
+          selectedRepo!.owner.login,
+          selectedRepo!.name,
+          selectedWorkflow!.path
+        );
+        setWorkflowInputs(inputs);
+
+        // Initialize input values with defaults
+        const defaults: Record<string, string> = {};
+        inputs.forEach((input) => {
+          if (input.default) {
+            defaults[input.name] = input.default;
+          }
+        });
+        setInputValues(defaults);
+      } catch (err) {
+        console.error("Failed to fetch workflow inputs:", err);
+      } finally {
+        setIsLoadingInputs(false);
+      }
+    }
+
+    loadInputs();
+  }, [selectedRepo, selectedWorkflow]);
+
   function handleRepoChange(fullName: string, repo: GitHubRepository) {
     setSelectedRepo(repo);
     setSelectedWorkflow(null);
+    setWorkflowInputs([]);
+    setInputValues({});
   }
 
   function handleWorkflowChange(path: string, workflow: WorkflowFile) {
     setSelectedWorkflow(workflow);
+  }
+
+  function handleInputChange(name: string, value: string) {
+    setInputValues((prev) => ({ ...prev, [name]: value }));
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -68,10 +115,28 @@ export function ScheduleForm({ onClose, onScheduleCreated }: ScheduleFormProps) 
       return;
     }
 
+    // Check required inputs
+    const missingRequired = workflowInputs
+      .filter((input) => input.required && !inputValues[input.name])
+      .map((input) => input.name);
+
+    if (missingRequired.length > 0) {
+      setError(`Missing required inputs: ${missingRequired.join(", ")}`);
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
       const utcTime = localToUTC(date, time, timezone);
+
+      // Filter out empty values
+      const filteredInputs: Record<string, string> = {};
+      Object.entries(inputValues).forEach(([key, value]) => {
+        if (value.trim()) {
+          filteredInputs[key] = value.trim();
+        }
+      });
 
       const payload: SchedulePayload = {
         repository: {
@@ -83,7 +148,7 @@ export function ScheduleForm({ onClose, onScheduleCreated }: ScheduleFormProps) 
           name: selectedWorkflow.name,
           path: selectedWorkflow.path,
         },
-        environment: environment.trim() || null,
+        inputs: filteredInputs,
         scheduledAt: utcTime,
         timezone,
       };
@@ -132,12 +197,89 @@ export function ScheduleForm({ onClose, onScheduleCreated }: ScheduleFormProps) 
           />
         </div>
 
-        <Input
-          label="Environment (optional)"
-          value={environment}
-          onChange={(e) => setEnvironment(e.target.value)}
-          placeholder="e.g., staging-test-123"
-        />
+        {/* Dynamic Workflow Inputs */}
+        {isLoadingInputs && (
+          <div className="flex items-center gap-2 text-sm text-zinc-500">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-600" />
+            Loading workflow inputs...
+          </div>
+        )}
+
+        {workflowInputs.length > 0 && (
+          <div className="flex flex-col gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900/50">
+            <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              Workflow Inputs
+            </h3>
+            {workflowInputs.map((input) => (
+              <div key={input.name}>
+                {input.type === "choice" && input.options ? (
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                      {input.name}
+                      {input.required && <span className="ml-1 text-red-500">*</span>}
+                    </label>
+                    <select
+                      value={inputValues[input.name] || ""}
+                      onChange={(e) => handleInputChange(input.name, e.target.value)}
+                      className="h-10 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-900 outline-none transition-colors focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white dark:focus:border-zinc-500"
+                    >
+                      <option value="">Select {input.name}</option>
+                      {input.options.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                    {input.description && (
+                      <p className="mt-1 text-xs text-zinc-500">{input.description}</p>
+                    )}
+                  </div>
+                ) : input.type === "boolean" ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id={input.name}
+                      checked={inputValues[input.name] === "true"}
+                      onChange={(e) =>
+                        handleInputChange(input.name, e.target.checked ? "true" : "false")
+                      }
+                      className="h-4 w-4 rounded border-zinc-300 dark:border-zinc-600"
+                    />
+                    <label
+                      htmlFor={input.name}
+                      className="text-sm font-medium text-zinc-600 dark:text-zinc-400"
+                    >
+                      {input.name}
+                      {input.required && <span className="ml-1 text-red-500">*</span>}
+                    </label>
+                    {input.description && (
+                      <span className="text-xs text-zinc-500">- {input.description}</span>
+                    )}
+                  </div>
+                ) : (
+                  <Input
+                    label={
+                      <>
+                        {input.name}
+                        {input.required && <span className="ml-1 text-red-500">*</span>}
+                      </>
+                    }
+                    value={inputValues[input.name] || ""}
+                    onChange={(e) => handleInputChange(input.name, e.target.value)}
+                    placeholder={input.default || `Enter ${input.name}`}
+                    helperText={input.description}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {selectedWorkflow && !isLoadingInputs && workflowInputs.length === 0 && (
+          <p className="text-sm text-zinc-500">
+            This workflow has no configurable inputs.
+          </p>
+        )}
       </div>
 
       <div className="h-px bg-zinc-200 dark:bg-zinc-800" />

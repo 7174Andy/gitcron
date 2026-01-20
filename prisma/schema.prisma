@@ -23,8 +23,8 @@ model Schedule {
   workflowName  String
   workflowPath  String
 
-  // Optional inputs
-  environment   String?
+  // Workflow dispatch inputs (stored as JSON)
+  inputs        Json      @default("{}")
   ref           String    @default("main")  // Branch to run on
 
   // Scheduling
