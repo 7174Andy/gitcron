@@ -19,6 +19,7 @@ No audit trail or edit history — the row is updated in place. `updatedAt` (alr
 Add `updateSchedule(id, { payload }): Promise<{ success: true; schedule: ScheduleResponse } | { success: false; error: string }>` to `lib/actions/schedules.ts`, next to `createSchedule`/`deleteSchedule`.
 
 Behavior:
+
 1. `auth()` — require a session, same as every other action here.
 2. Re-encrypt the *current* session's GitHub access token (`encrypt(session.accessToken)`) into the update, same as `createSchedule` does on insert — covers the case where the token rotated since the schedule was first created.
 3. Update atomically with a status guard to avoid a race against the cron poller (`/api/cron/execute`, which flips `pending` → `triggered`/`failed` via `updateScheduleStatus`):
@@ -56,9 +57,11 @@ interface ScheduleFormProps {
 ```
 
 When `initialSchedule` is present:
+
 - `date`/`time`/`timezone` state initialize from `scheduledAt` + `timezone` (converted with the existing `toZonedTime`/`format` helpers already used in `ScheduleCard`) instead of the "tomorrow at 9am" default.
 - `inputValues` initializes from `initialSchedule.inputs`.
 - `selectedRepo`/`selectedWorkflow` initialize from placeholder objects built directly out of the stored strings, since `RepositorySelect`/`WorkflowSelect` only report full objects back on user interaction, not on mount:
+
   ```ts
   const initialRepo: GitHubRepository = {
     id: 0,
@@ -74,8 +77,11 @@ When `initialSchedule` is present:
     path: initialSchedule.workflowPath,
   };
   ```
+
   (`WorkflowFile` is already exactly `{ name, path }`, so no placeholder fields needed there.)
+
 - The workflow-inputs-loading `useEffect` (currently always overwrites `inputValues` with `input.default` for every input) must only fill in a default for keys **not already present** in `inputValues`, so it doesn't clobber the values carried over from `initialSchedule.inputs`:
+
   ```ts
   setInputValues((prev) => {
     const next = { ...prev };
@@ -87,6 +93,7 @@ When `initialSchedule` is present:
     return next;
   });
   ```
+
 - `handleSubmit` calls `updateSchedule(initialSchedule.id, { payload })` instead of `createSchedule({ payload })` when in edit mode; everything else about validation/payload construction is unchanged.
 - Submit button label reads "Save changes" instead of "Schedule" in edit mode.
 
@@ -100,6 +107,7 @@ When `initialSchedule` is present:
 ## Testing
 
 Manual verification via `npm run dev` (no automated test suite exists in this repo currently):
+
 1. Create a schedule, click Edit, change the date/time — confirm the list reflects the new time after save.
 2. Edit a schedule's workflow inputs — confirm previously-set values are preserved and pre-filled, not reset to workflow defaults.
 3. Edit a schedule's repository/workflow selection — confirm workflow inputs reload for the newly selected workflow.
