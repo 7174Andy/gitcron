@@ -122,7 +122,9 @@ export function HomeContent() {
   }, []);
 
   useEffect(() => {
-    fetchSchedules();
+    (async () => {
+      await fetchSchedules();
+    })();
   }, [fetchSchedules]);
 
   function handleScheduleCreated() {
