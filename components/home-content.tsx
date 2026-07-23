@@ -27,9 +27,11 @@ function StatusBadge({ status }: { status: string }) {
 function ScheduleCard({
   schedule,
   onDelete,
+  onEdit,
 }: {
   schedule: ScheduleResponse;
   onDelete: (id: string) => void;
+  onEdit: (schedule: ScheduleResponse) => void;
 }) {
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -88,21 +90,37 @@ function ScheduleCard({
         )}
       </div>
       {schedule.status === "pending" && (
-        <button
-          onClick={handleDelete}
-          disabled={isDeleting}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600 disabled:opacity-50 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
-          title="Cancel schedule"
-        >
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => onEdit(schedule)}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+            title="Edit schedule"
+          >
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+              />
+            </svg>
+          </button>
+          <button
+            onClick={handleDelete}
+            disabled={isDeleting}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600 disabled:opacity-50 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+            title="Cancel schedule"
+          >
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        </div>
       )}
     </div>
   );
@@ -110,6 +128,7 @@ function ScheduleCard({
 
 export function HomeContent() {
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingSchedule, setEditingSchedule] = useState<ScheduleResponse | null>(null);
   const [schedules, setSchedules] = useState<ScheduleResponse[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -133,6 +152,21 @@ export function HomeContent() {
 
   function handleScheduleDeleted(id: string) {
     setSchedules((prev) => prev.filter((s) => s.id !== id));
+  }
+
+  function handleEditSchedule(schedule: ScheduleResponse) {
+    setEditingSchedule(schedule);
+    setIsModalOpen(true);
+  }
+
+  function handleOpenCreateModal() {
+    setEditingSchedule(null);
+    setIsModalOpen(true);
+  }
+
+  function handleCloseModal() {
+    setIsModalOpen(false);
+    setEditingSchedule(null);
   }
 
   const pendingSchedules = schedules.filter((s) => s.status === "pending");
@@ -175,7 +209,7 @@ export function HomeContent() {
               </p>
             </div>
             <button
-              onClick={() => setIsModalOpen(true)}
+              onClick={handleOpenCreateModal}
               className="mt-2 flex h-10 items-center justify-center rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white transition-colors hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
             >
               Schedule a workflow
@@ -189,7 +223,7 @@ export function HomeContent() {
               Scheduled Workflows
             </h2>
             <button
-              onClick={() => setIsModalOpen(true)}
+              onClick={handleOpenCreateModal}
               className="flex h-9 items-center gap-2 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white transition-colors hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
             >
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -215,6 +249,7 @@ export function HomeContent() {
                     key={schedule.id}
                     schedule={schedule}
                     onDelete={handleScheduleDeleted}
+                    onEdit={handleEditSchedule}
                   />
                 ))}
               </div>
@@ -232,6 +267,7 @@ export function HomeContent() {
                     key={schedule.id}
                     schedule={schedule}
                     onDelete={handleScheduleDeleted}
+                    onEdit={handleEditSchedule}
                   />
                 ))}
               </div>
@@ -246,17 +282,17 @@ export function HomeContent() {
           {/* Backdrop */}
           <div
             className="absolute inset-0 bg-black/50"
-            onClick={() => setIsModalOpen(false)}
+            onClick={handleCloseModal}
           />
 
           {/* Modal content */}
           <div className="relative z-10 w-full max-w-lg rounded-xl border border-zinc-200 bg-white p-6 shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
             <div className="mb-6 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-zinc-900 dark:text-white">
-                Schedule a Workflow
+                {editingSchedule ? "Edit Scheduled Workflow" : "Schedule a Workflow"}
               </h2>
               <button
-                onClick={() => setIsModalOpen(false)}
+                onClick={handleCloseModal}
                 className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
               >
                 <svg
@@ -275,8 +311,9 @@ export function HomeContent() {
               </button>
             </div>
             <ScheduleForm
-              onClose={() => setIsModalOpen(false)}
+              onClose={handleCloseModal}
               onScheduleCreated={handleScheduleCreated}
+              initialSchedule={editingSchedule ?? undefined}
             />
           </div>
         </div>
