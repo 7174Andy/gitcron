@@ -190,6 +190,75 @@ export async function deleteSchedule(
   }
 }
 
+export async function updateSchedule(
+  id: string,
+  input: CreateScheduleInput
+): Promise<{ success: true; schedule: ScheduleResponse } | { success: false; error: string }> {
+  try {
+    const session = await auth();
+
+    if (!session?.accessToken || !session?.user?.id) {
+      return { success: false, error: "Not authenticated" };
+    }
+
+    const { payload } = input;
+
+    // Atomically guard against a race with the cron poller (/api/cron/execute),
+    // which may flip this schedule to triggered/failed between the user opening
+    // the edit form and submitting.
+    const result = await prisma.schedule.updateMany({
+      where: {
+        id,
+        userId: session.user.id,
+        status: "pending",
+      },
+      data: {
+        owner: payload.repository.owner,
+        repo: payload.repository.name,
+        repoFullName: payload.repository.fullName,
+        workflowName: payload.workflow.name,
+        workflowPath: payload.workflow.path,
+        inputs: payload.inputs,
+        scheduledAt: new Date(payload.scheduledAt),
+        timezone: payload.timezone,
+        accessToken: encrypt(session.accessToken),
+      },
+    });
+
+    if (result.count === 0) {
+      return {
+        success: false,
+        error: "This schedule was already triggered and can no longer be edited.",
+      };
+    }
+
+    const schedule = await prisma.schedule.findUniqueOrThrow({
+      where: { id },
+      select: {
+        id: true,
+        owner: true,
+        repo: true,
+        repoFullName: true,
+        workflowName: true,
+        workflowPath: true,
+        inputs: true,
+        ref: true,
+        scheduledAt: true,
+        timezone: true,
+        status: true,
+        triggeredAt: true,
+        errorMessage: true,
+        createdAt: true,
+      },
+    });
+
+    return { success: true, schedule: toScheduleResponse(schedule) };
+  } catch (error) {
+    console.error("Failed to update schedule:", error);
+    return { success: false, error: "Failed to update schedule" };
+  }
+}
+
 // Internal function for cron job - does not require session
 export async function getDueSchedules() {
   const now = new Date();
