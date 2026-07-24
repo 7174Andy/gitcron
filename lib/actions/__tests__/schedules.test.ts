@@ -19,6 +19,7 @@ import { auth } from "@/auth";
 import {
   claimSchedule,
   getDueScheduleIds,
+  getSchedules,
   updateSchedule,
   updateScheduleStatus,
 } from "@/lib/actions/schedules";
@@ -221,5 +222,58 @@ describe("updateScheduleStatus", () => {
     expect(result.count).toBe(0);
     const rows = fakeStore.schedule.rowsSnapshot();
     expect(rows.find((r) => r.id === "s1")?.status).toBe("triggered");
+  });
+});
+
+describe("run result fields", () => {
+  it("getSchedules exposes runUrl and runConclusion", async () => {
+    mockSession();
+    fakeStore.schedule = createFakeScheduleStore([
+      makeScheduleRow({
+        id: "s1",
+        status: "triggered",
+        runId: 123n,
+        runUrl: "https://github.com/octo-org/octo-repo/actions/runs/123",
+        runConclusion: "success",
+      }),
+    ]);
+
+    const result = await getSchedules();
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.schedules[0].runUrl).toBe(
+      "https://github.com/octo-org/octo-repo/actions/runs/123"
+    );
+    expect(result.schedules[0].runConclusion).toBe("success");
+  });
+});
+
+describe("fake store comparison operators", () => {
+  const T0 = new Date("2026-07-24T00:00:00Z");
+  const T1 = new Date("2026-07-24T01:00:00Z");
+  const T2 = new Date("2026-07-24T02:00:00Z");
+
+  it("supports gte and lt on Date fields", async () => {
+    const store = createFakeScheduleStore([
+      makeScheduleRow({ id: "old", triggeredAt: T0 }),
+      makeScheduleRow({ id: "mid", triggeredAt: T1 }),
+      makeScheduleRow({ id: "new", triggeredAt: T2 }),
+    ]);
+
+    const gte = await store.findMany({ where: { triggeredAt: { gte: T1 } }, select: { id: true } });
+    expect(gte.map((r) => r.id).sort()).toEqual(["mid", "new"]);
+
+    const lt = await store.findMany({ where: { triggeredAt: { lt: T1 } }, select: { id: true } });
+    expect(lt.map((r) => r.id)).toEqual(["old"]);
+  });
+
+  it("a null field never matches a comparison operator", async () => {
+    const store = createFakeScheduleStore([
+      makeScheduleRow({ id: "never-triggered", triggeredAt: null }),
+    ]);
+
+    const rows = await store.findMany({ where: { triggeredAt: { gte: T0 } }, select: { id: true } });
+    expect(rows).toEqual([]);
   });
 });

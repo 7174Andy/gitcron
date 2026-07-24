@@ -23,6 +23,8 @@ export interface ScheduleResponse {
   status: ScheduleStatus;
   triggeredAt: string | null;
   errorMessage: string | null;
+  runUrl: string | null;
+  runConclusion: string | null;
   createdAt: string;
 }
 
@@ -40,6 +42,8 @@ function toScheduleResponse(schedule: {
   status: string;
   triggeredAt: Date | null;
   errorMessage: string | null;
+  runUrl: string | null;
+  runConclusion: string | null;
   createdAt: Date;
 }): ScheduleResponse {
   return {
@@ -56,6 +60,8 @@ function toScheduleResponse(schedule: {
     status: schedule.status as ScheduleStatus,
     triggeredAt: schedule.triggeredAt?.toISOString() ?? null,
     errorMessage: schedule.errorMessage,
+    runUrl: schedule.runUrl,
+    runConclusion: schedule.runConclusion,
     createdAt: schedule.createdAt.toISOString(),
   };
 }
@@ -99,6 +105,8 @@ export async function createSchedule(
         status: true,
         triggeredAt: true,
         errorMessage: true,
+        runUrl: true,
+        runConclusion: true,
         createdAt: true,
       },
     });
@@ -138,6 +146,8 @@ export async function getSchedules(): Promise<
         status: true,
         triggeredAt: true,
         errorMessage: true,
+        runUrl: true,
+        runConclusion: true,
         createdAt: true,
       },
       orderBy: {
@@ -248,6 +258,8 @@ export async function updateSchedule(
         status: true,
         triggeredAt: true,
         errorMessage: true,
+        runUrl: true,
+        runConclusion: true,
         createdAt: true,
       },
     });

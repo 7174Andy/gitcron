@@ -22,6 +22,9 @@ export interface FakeScheduleRow {
   status: string;
   triggeredAt: Date | null;
   errorMessage: string | null;
+  runId: bigint | null;
+  runUrl: string | null;
+  runConclusion: string | null;
   accessToken: string;
   createdAt: Date;
 }
@@ -32,8 +35,18 @@ type Select = Record<string, boolean> | undefined;
 function matches(row: FakeScheduleRow, where: Where): boolean {
   return Object.entries(where).every(([key, condition]) => {
     const value = row[key as keyof FakeScheduleRow];
-    if (condition && typeof condition === "object" && "lte" in condition) {
-      return (value as Date) <= (condition as { lte: Date }).lte;
+    if (
+      condition &&
+      typeof condition === "object" &&
+      ("lte" in condition || "lt" in condition || "gte" in condition)
+    ) {
+      const ops = condition as { lte?: Date; lt?: Date; gte?: Date };
+      if (value === null || value === undefined) return false;
+      const v = value as Date;
+      if (ops.lte !== undefined && !(v <= ops.lte)) return false;
+      if (ops.lt !== undefined && !(v < ops.lt)) return false;
+      if (ops.gte !== undefined && !(v >= ops.gte)) return false;
+      return true;
     }
     return value === condition;
   });
@@ -64,6 +77,9 @@ export function makeScheduleRow(overrides: Partial<FakeScheduleRow> = {}): FakeS
     status: "pending",
     triggeredAt: null,
     errorMessage: null,
+    runId: null,
+    runUrl: null,
+    runConclusion: null,
     accessToken: "enc:ghp_token",
     createdAt: new Date("2026-07-01T00:00:00Z"),
     ...overrides,
