@@ -226,3 +226,126 @@ export async function triggerWorkflowDispatchWithToken(
     };
   }
 }
+
+export interface WorkflowRunSummary {
+  id: number;
+  htmlUrl: string;
+  status: string;
+  conclusion: string | null;
+  createdAt: string;
+}
+
+export interface ListWorkflowRunsResult {
+  success: boolean;
+  runs?: WorkflowRunSummary[];
+  error?: string;
+}
+
+export interface GetWorkflowRunResult {
+  success: boolean;
+  run?: WorkflowRunSummary;
+  error?: string;
+}
+
+interface RawWorkflowRun {
+  id: number;
+  html_url: string;
+  status: string;
+  conclusion: string | null;
+  created_at: string;
+}
+
+function toRunSummary(run: RawWorkflowRun): WorkflowRunSummary {
+  return {
+    id: run.id,
+    htmlUrl: run.html_url,
+    status: run.status,
+    conclusion: run.conclusion,
+    createdAt: run.created_at,
+  };
+}
+
+// Lists workflow_dispatch runs of one workflow created at/after `createdAfter`
+// (ISO timestamp), on one branch. Used by the cron resolution pass to locate
+// the run a dispatch created, since the dispatch API returns no run id.
+export async function listWorkflowRunsWithToken(
+  accessToken: string,
+  owner: string,
+  repo: string,
+  workflowPath: string,
+  branch: string,
+  createdAfter: string,
+): Promise<ListWorkflowRunsResult> {
+  try {
+    const workflowId = workflowPath.split("/").pop();
+    const params = new URLSearchParams({
+      event: "workflow_dispatch",
+      branch,
+      created: `>=${createdAfter}`,
+      per_page: "100",
+    });
+
+    const response = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflowId}/runs?${params}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/vnd.github.v3+json",
+        },
+      },
+    );
+
+    if (!response.ok) {
+      console.error(`List workflow runs failed: ${response.status}`);
+      return {
+        success: false,
+        error: `GitHub API error: ${response.status} - ${response.statusText}`,
+      };
+    }
+
+    const data = (await response.json()) as { workflow_runs?: RawWorkflowRun[] };
+    return { success: true, runs: (data.workflow_runs ?? []).map(toRunSummary) };
+  } catch (error) {
+    console.error("Failed to list workflow runs:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
+export async function getWorkflowRunWithToken(
+  accessToken: string,
+  owner: string,
+  repo: string,
+  runId: number,
+): Promise<GetWorkflowRunResult> {
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/actions/runs/${runId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/vnd.github.v3+json",
+        },
+      },
+    );
+
+    if (!response.ok) {
+      console.error(`Get workflow run failed: ${response.status}`);
+      return {
+        success: false,
+        error: `GitHub API error: ${response.status} - ${response.statusText}`,
+      };
+    }
+
+    const run = (await response.json()) as RawWorkflowRun;
+    return { success: true, run: toRunSummary(run) };
+  } catch (error) {
+    console.error("Failed to get workflow run:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
