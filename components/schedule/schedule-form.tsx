@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { format } from "date-fns";
+import { toZonedTime } from "date-fns-tz";
 import { RepositorySelect } from "./repository-select";
 import { WorkflowSelect } from "./workflow-select";
 import { DateTimePicker } from "./datetime-picker";
@@ -10,7 +11,7 @@ import { SchedulePreview } from "./schedule-preview";
 import { Input } from "@/components/ui/input";
 import { useTimezone } from "@/lib/hooks/use-timezone";
 import { localToUTC } from "@/lib/timezone/utils";
-import { createSchedule } from "@/lib/actions/schedules";
+import { createSchedule, updateSchedule, type ScheduleResponse } from "@/lib/actions/schedules";
 import { fetchWorkflowInputs } from "@/lib/actions/github";
 import type { GitHubRepository, WorkflowFile, WorkflowInput } from "@/lib/github/types";
 import type { SchedulePayload } from "@/types/schedule";
@@ -28,26 +29,51 @@ function isTimeInPast(date: string, time: string, timezone: string): boolean {
 interface ScheduleFormProps {
   onClose?: () => void;
   onScheduleCreated?: () => void;
+  initialSchedule?: ScheduleResponse;
 }
 
-export function ScheduleForm({ onClose, onScheduleCreated }: ScheduleFormProps) {
+export function ScheduleForm({ onClose, onScheduleCreated, initialSchedule }: ScheduleFormProps) {
   const detectedTimezone = useTimezone();
   const [error, setError] = useState<string | null>(null);
 
-  const [selectedRepo, setSelectedRepo] = useState<GitHubRepository | null>(null);
-  const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowFile | null>(null);
+  const [selectedRepo, setSelectedRepo] = useState<GitHubRepository | null>(
+    initialSchedule
+      ? {
+          id: 0,
+          name: initialSchedule.repo,
+          full_name: initialSchedule.repoFullName,
+          owner: { login: initialSchedule.owner },
+          private: false,
+          description: null,
+          updated_at: "",
+        }
+      : null
+  );
+  const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowFile | null>(
+    initialSchedule
+      ? { name: initialSchedule.workflowName, path: initialSchedule.workflowPath }
+      : null
+  );
 
   // Workflow inputs
   const [workflowInputs, setWorkflowInputs] = useState<WorkflowInput[]>([]);
-  const [inputValues, setInputValues] = useState<Record<string, string>>({});
+  const [inputValues, setInputValues] = useState<Record<string, string>>(
+    initialSchedule?.inputs ?? {}
+  );
   const [isLoadingInputs, setIsLoadingInputs] = useState(false);
 
-  // Initialize with tomorrow's date
+  const initialZonedDate = initialSchedule
+    ? toZonedTime(new Date(initialSchedule.scheduledAt), initialSchedule.timezone)
+    : null;
+
+  // Initialize with tomorrow's date, or the existing schedule's date/time when editing
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
-  const [date, setDate] = useState(format(tomorrow, "yyyy-MM-dd"));
-  const [time, setTime] = useState("09:00");
-  const [timezone, setTimezone] = useState(detectedTimezone);
+  const [date, setDate] = useState(
+    initialZonedDate ? format(initialZonedDate, "yyyy-MM-dd") : format(tomorrow, "yyyy-MM-dd")
+  );
+  const [time, setTime] = useState(initialZonedDate ? format(initialZonedDate, "HH:mm") : "09:00");
+  const [timezone, setTimezone] = useState(initialSchedule?.timezone ?? detectedTimezone);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -74,14 +100,17 @@ export function ScheduleForm({ onClose, onScheduleCreated }: ScheduleFormProps) 
         );
         setWorkflowInputs(inputs);
 
-        // Initialize input values with defaults
-        const defaults: Record<string, string> = {};
-        inputs.forEach((input) => {
-          if (input.default) {
-            defaults[input.name] = input.default;
-          }
+        // Fill in defaults only for keys that don't already have a value, so
+        // values carried over from initialSchedule.inputs (edit mode) survive.
+        setInputValues((prev) => {
+          const next = { ...prev };
+          inputs.forEach((input) => {
+            if (input.default && next[input.name] === undefined) {
+              next[input.name] = input.default;
+            }
+          });
+          return next;
         });
-        setInputValues(defaults);
       } catch (err) {
         console.error("Failed to fetch workflow inputs:", err);
       } finally {
@@ -101,6 +130,7 @@ export function ScheduleForm({ onClose, onScheduleCreated }: ScheduleFormProps) 
 
   function handleWorkflowChange(path: string, workflow: WorkflowFile) {
     setSelectedWorkflow(workflow);
+    setInputValues({});
   }
 
   function handleInputChange(name: string, value: string) {
@@ -153,7 +183,9 @@ export function ScheduleForm({ onClose, onScheduleCreated }: ScheduleFormProps) 
         timezone,
       };
 
-      const result = await createSchedule({ payload });
+      const result = initialSchedule
+        ? await updateSchedule(initialSchedule.id, { payload })
+        : await createSchedule({ payload });
 
       if (!result.success) {
         setError(result.error);
@@ -163,7 +195,7 @@ export function ScheduleForm({ onClose, onScheduleCreated }: ScheduleFormProps) 
       onScheduleCreated?.();
       onClose?.();
     } catch (err) {
-      console.error("Failed to create schedule:", err);
+      console.error("Failed to save schedule:", err);
       setError("An unexpected error occurred");
     } finally {
       setIsSubmitting(false);
@@ -352,7 +384,13 @@ export function ScheduleForm({ onClose, onScheduleCreated }: ScheduleFormProps) 
           disabled={!isValid || isSubmitting}
           className="h-10 rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
         >
-          {isSubmitting ? "Scheduling..." : "Schedule"}
+          {isSubmitting
+            ? initialSchedule
+              ? "Saving..."
+              : "Scheduling..."
+            : initialSchedule
+              ? "Save changes"
+              : "Schedule"}
         </button>
       </div>
     </form>

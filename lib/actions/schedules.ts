@@ -3,7 +3,7 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
-import type { SchedulePayload } from "@/types/schedule";
+import type { SchedulePayload, ScheduleStatus } from "@/types/schedule";
 
 export interface CreateScheduleInput {
   payload: SchedulePayload;
@@ -20,7 +20,7 @@ export interface ScheduleResponse {
   ref: string;
   scheduledAt: string;
   timezone: string;
-  status: string;
+  status: ScheduleStatus;
   triggeredAt: string | null;
   errorMessage: string | null;
   createdAt: string;
@@ -53,7 +53,7 @@ function toScheduleResponse(schedule: {
     ref: schedule.ref,
     scheduledAt: schedule.scheduledAt.toISOString(),
     timezone: schedule.timezone,
-    status: schedule.status,
+    status: schedule.status as ScheduleStatus,
     triggeredAt: schedule.triggeredAt?.toISOString() ?? null,
     errorMessage: schedule.errorMessage,
     createdAt: schedule.createdAt.toISOString(),
@@ -190,27 +190,169 @@ export async function deleteSchedule(
   }
 }
 
-// Internal function for cron job - does not require session
-export async function getDueSchedules() {
-  const now = new Date();
+export async function updateSchedule(
+  id: string,
+  input: CreateScheduleInput
+): Promise<{ success: true; schedule: ScheduleResponse } | { success: false; error: string }> {
+  try {
+    const session = await auth();
 
-  return prisma.schedule.findMany({
+    if (!session?.accessToken || !session?.user?.id) {
+      return { success: false, error: "Not authenticated" };
+    }
+
+    const { payload } = input;
+
+    // Atomically guard against a race with the cron poller (/api/cron/execute),
+    // which may flip this schedule to triggered/failed between the user opening
+    // the edit form and submitting.
+    const result = await prisma.schedule.updateMany({
+      where: {
+        id,
+        userId: session.user.id,
+        status: "pending",
+      },
+      data: {
+        owner: payload.repository.owner,
+        repo: payload.repository.name,
+        repoFullName: payload.repository.fullName,
+        workflowName: payload.workflow.name,
+        workflowPath: payload.workflow.path,
+        inputs: payload.inputs,
+        scheduledAt: new Date(payload.scheduledAt),
+        timezone: payload.timezone,
+        accessToken: encrypt(session.accessToken),
+      },
+    });
+
+    if (result.count === 0) {
+      return {
+        success: false,
+        error: "This schedule is no longer pending and can no longer be edited.",
+      };
+    }
+
+    const schedule = await prisma.schedule.findUniqueOrThrow({
+      where: { id },
+      select: {
+        id: true,
+        owner: true,
+        repo: true,
+        repoFullName: true,
+        workflowName: true,
+        workflowPath: true,
+        inputs: true,
+        ref: true,
+        scheduledAt: true,
+        timezone: true,
+        status: true,
+        triggeredAt: true,
+        errorMessage: true,
+        createdAt: true,
+      },
+    });
+
+    return { success: true, schedule: toScheduleResponse(schedule) };
+  } catch (error) {
+    console.error("Failed to update schedule:", error);
+    return { success: false, error: "Failed to update schedule" };
+  }
+}
+
+export interface ClaimedSchedule {
+  id: string;
+  owner: string;
+  repo: string;
+  repoFullName: string;
+  workflowName: string;
+  workflowPath: string;
+  inputs: unknown;
+  ref: string;
+  accessToken: string;
+}
+
+// Internal functions for the cron job - do not require a session.
+//
+// The cron dispatcher must never dispatch a workflow using field values it
+// read before it acquired exclusive ownership of the row: a user's edit
+// (guarded on status "pending" in updateSchedule above) can land at any time
+// up until this dispatcher claims the row. So this is split into two steps:
+//
+//   1. getDueScheduleIds: a cheap read of candidate ids. This snapshot can go
+//      stale (a schedule may be edited, rescheduled, or claimed by another
+//      concurrent invocation) and that's fine - it's never used for dispatch,
+//      only to know what to attempt to claim.
+//   2. claimSchedule: an atomic pending -> processing transition, conditioned
+//      on the row still being pending and still due. Only the caller that
+//      wins this conditional update (count === 1) owns the row, which is
+//      what prevents two overlapping cron invocations from both dispatching
+//      the same schedule. The winner then re-reads the row from the database
+//      so dispatch always uses the latest edited values, not the stale
+//      snapshot from step 1.
+
+export async function getDueScheduleIds(now: Date): Promise<string[]> {
+  const due = await prisma.schedule.findMany({
     where: {
       status: "pending",
       scheduledAt: {
         lte: now,
       },
     },
+    select: { id: true },
+  });
+
+  return due.map((schedule) => schedule.id);
+}
+
+export async function claimSchedule(
+  id: string,
+  now: Date
+): Promise<ClaimedSchedule | null> {
+  const claim = await prisma.schedule.updateMany({
+    where: {
+      id,
+      status: "pending",
+      scheduledAt: {
+        lte: now,
+      },
+    },
+    data: {
+      status: "processing",
+    },
+  });
+
+  // Someone else already claimed this row, it was edited to a future date,
+  // or it was deleted - either way, this invocation does not own it.
+  if (claim.count === 0) {
+    return null;
+  }
+
+  return prisma.schedule.findUniqueOrThrow({
+    where: { id },
+    select: {
+      id: true,
+      owner: true,
+      repo: true,
+      repoFullName: true,
+      workflowName: true,
+      workflowPath: true,
+      inputs: true,
+      ref: true,
+      accessToken: true,
+    },
   });
 }
 
+// Moves a claimed (processing) schedule to a terminal state. Guarded on the
+// row still being "processing" so a stray double-call can't clobber a
+// terminal state that's already been set.
 export async function updateScheduleStatus(
   id: string,
   status: "triggered" | "failed",
   errorMessage?: string
 ) {
-  return prisma.schedule.update({
-    where: { id },
+  return prisma.schedule.updateMany({
+    where: { id, status: "processing" },
     data: {
       status,
       triggeredAt: status === "triggered" ? new Date() : undefined,

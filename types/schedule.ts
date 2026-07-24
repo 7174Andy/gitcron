@@ -1,3 +1,8 @@
+// pending: editable, not yet due
+// processing: claimed by the cron dispatcher, dispatch in flight (terminal-adjacent, non-editable)
+// triggered / failed: terminal, non-editable
+export type ScheduleStatus = "pending" | "processing" | "triggered" | "failed";
+
 export interface ScheduleFormData {
   repository: string | null;
   workflow: string | null;

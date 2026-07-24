@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { getDueSchedules, updateScheduleStatus } from "@/lib/actions/schedules";
+import {
+  claimSchedule,
+  getDueScheduleIds,
+  updateScheduleStatus,
+} from "@/lib/actions/schedules";
 import { triggerWorkflowDispatchWithToken } from "@/lib/actions/github";
 import { decrypt } from "@/lib/crypto";
 
@@ -10,7 +14,7 @@ interface ExecutionResult {
   id: string;
   repoFullName: string;
   workflowName: string;
-  status: "triggered" | "failed";
+  status: "triggered" | "failed" | "skipped";
   error?: string;
 }
 
@@ -35,10 +39,13 @@ export async function GET(request: Request) {
   }
 
   try {
-    // Get all pending schedules that are due
-    const dueSchedules = await getDueSchedules();
+    // Cheap snapshot of candidate ids. Never used for dispatch - only to know
+    // what to attempt to claim, since this list can go stale the instant
+    // it's read (a concurrent cron invocation, or a user edit).
+    const now = new Date();
+    const dueScheduleIds = await getDueScheduleIds(now);
 
-    if (dueSchedules.length === 0) {
+    if (dueScheduleIds.length === 0) {
       return NextResponse.json({
         message: "No schedules due",
         processed: 0,
@@ -48,9 +55,26 @@ export async function GET(request: Request) {
     const results: ExecutionResult[] = [];
 
     // Process each due schedule
-    for (const schedule of dueSchedules) {
+    for (const id of dueScheduleIds) {
+      // Atomically claim the row (pending -> processing). If another
+      // invocation already claimed it, or it was edited/rescheduled since
+      // the snapshot above, this returns null and we skip it - this is what
+      // prevents duplicate dispatches when cron invocations overlap.
+      const schedule = await claimSchedule(id, now);
+
+      if (!schedule) {
+        results.push({
+          id,
+          repoFullName: "",
+          workflowName: "",
+          status: "skipped",
+        });
+        continue;
+      }
+
       try {
-        // Get inputs from schedule (stored as JSON)
+        // Get inputs from the freshly claimed row (stored as JSON), never
+        // from the stale pre-claim snapshot.
         const inputs = (schedule.inputs as Record<string, string>) || {};
 
         // Decrypt token and trigger the workflow
@@ -97,12 +121,14 @@ export async function GET(request: Request) {
 
     const triggered = results.filter((r) => r.status === "triggered").length;
     const failed = results.filter((r) => r.status === "failed").length;
+    const skipped = results.filter((r) => r.status === "skipped").length;
 
     return NextResponse.json({
       message: `Processed ${results.length} schedules`,
       processed: results.length,
       triggered,
       failed,
+      skipped,
       results,
     });
   } catch (error) {
