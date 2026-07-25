@@ -6,21 +6,54 @@ import { toZonedTime } from "date-fns-tz";
 import { ScheduleForm } from "@/components/schedule/schedule-form";
 import { getSchedules, deleteSchedule, type ScheduleResponse } from "@/lib/actions/schedules";
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({
+  status,
+  runConclusion,
+}: {
+  status: string;
+  runConclusion: string | null;
+}) {
   const styles = {
-    pending: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
-    processing: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-    triggered: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
-    failed: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+    yellow: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
+    blue: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+    green: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
+    red: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+    zinc: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
   };
+
+  // status describes the dispatch; runConclusion describes the GitHub run
+  // it created (null until the run completes or we give up).
+  let label = status;
+  let color: keyof typeof styles = "yellow";
+
+  if (status === "pending") {
+    label = "scheduled";
+  } else if (status === "processing") {
+    color = "blue";
+  } else if (status === "failed") {
+    color = "red";
+  } else if (status === "triggered") {
+    if (runConclusion === null) {
+      label = "running…";
+      color = "blue";
+    } else if (runConclusion === "success") {
+      label = "succeeded";
+      color = "green";
+    } else if (runConclusion === "failure" || runConclusion === "timed_out") {
+      label = runConclusion === "failure" ? "run failed" : "timed out";
+      color = "red";
+    } else {
+      // cancelled, unknown, skipped, stale, neutral, action_required
+      label = runConclusion.replace(/_/g, " ");
+      color = "zinc";
+    }
+  }
 
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-        styles[status as keyof typeof styles] || styles.pending
-      }`}
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${styles[color]}`}
     >
-      {status}
+      {label}
     </span>
   );
 }
@@ -65,7 +98,7 @@ function ScheduleCard({
           <span className="font-medium text-zinc-900 dark:text-white">
             {schedule.workflowName}
           </span>
-          <StatusBadge status={schedule.status} />
+          <StatusBadge status={schedule.status} runConclusion={schedule.runConclusion} />
         </div>
         <div className="flex items-center gap-2 text-sm text-zinc-500">
           <span>{schedule.repoFullName}</span>
@@ -88,6 +121,16 @@ function ScheduleCard({
         )}
         {schedule.errorMessage && (
           <span className="text-xs text-red-500">Error: {schedule.errorMessage}</span>
+        )}
+        {schedule.runUrl && (
+          <a
+            href={schedule.runUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-blue-600 hover:underline dark:text-blue-400"
+          >
+            View run on GitHub ↗
+          </a>
         )}
       </div>
       {schedule.status === "pending" && (
