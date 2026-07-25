@@ -6,6 +6,8 @@ import {
 } from "@/lib/actions/schedules";
 import { triggerWorkflowDispatchWithToken } from "@/lib/actions/github";
 import { decrypt } from "@/lib/crypto";
+import { resolveTriggeredSchedules } from "@/lib/cron/resolve-runs";
+import type { ResolutionSummary } from "@/lib/cron/resolve-runs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -119,6 +121,19 @@ export async function GET(request: Request) {
       }
     }
 
+    // Post-dispatch: locate GitHub runs for triggered schedules and record
+    // their conclusions. Isolated so a resolution failure can never mask the
+    // dispatch results above.
+    let resolution: ResolutionSummary | { error: string };
+    try {
+      resolution = await resolveTriggeredSchedules(now);
+    } catch (error) {
+      console.error("Run resolution pass failed:", error);
+      resolution = {
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
+    }
+
     const triggered = results.filter((r) => r.status === "triggered").length;
     const failed = results.filter((r) => r.status === "failed").length;
     const skipped = results.filter((r) => r.status === "skipped").length;
@@ -129,6 +144,7 @@ export async function GET(request: Request) {
       triggered,
       failed,
       skipped,
+      resolution,
       results,
     });
   } catch (error) {
