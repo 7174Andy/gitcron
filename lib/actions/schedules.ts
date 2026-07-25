@@ -372,3 +372,105 @@ export async function updateScheduleStatus(
     },
   });
 }
+
+// --- Run resolution helpers (cron-internal, no session) ---
+//
+// After a dispatch succeeds, GitHub gives us no run id (the dispatch API
+// returns 204). These helpers back the resolution pass in
+// lib/cron/resolve-runs.ts, which locates the created run via time-window
+// matching and polls it to completion. A schedule is "unresolved" while
+// status is "triggered" and runConclusion is null; `cutoff` is now − 24h,
+// past which the pass gives up and marks the row "unknown".
+
+export interface UnresolvedSchedule {
+  id: string;
+  owner: string;
+  repo: string;
+  repoFullName: string;
+  workflowPath: string;
+  ref: string;
+  triggeredAt: Date;
+  runId: bigint | null;
+  accessToken: string;
+}
+
+export async function getUnresolvedSchedules(cutoff: Date): Promise<UnresolvedSchedule[]> {
+  const rows = await prisma.schedule.findMany({
+    where: {
+      status: "triggered",
+      runConclusion: null,
+      triggeredAt: { gte: cutoff },
+    },
+    select: {
+      id: true,
+      owner: true,
+      repo: true,
+      repoFullName: true,
+      workflowPath: true,
+      ref: true,
+      triggeredAt: true,
+      runId: true,
+      accessToken: true,
+    },
+  });
+
+  // Sorted in JS (not orderBy) so schedules link runs in dispatch order,
+  // which is what makes sibling-run assignment deterministic.
+  return (rows as UnresolvedSchedule[]).sort(
+    (a, b) => a.triggeredAt.getTime() - b.triggeredAt.getTime()
+  );
+}
+
+export async function getLinkedRunIds(
+  repoFullName: string,
+  workflowPath: string
+): Promise<Set<number>> {
+  const rows = await prisma.schedule.findMany({
+    where: { repoFullName, workflowPath },
+    select: { runId: true },
+  });
+
+  return new Set(
+    rows
+      .filter((row) => row.runId !== null)
+      .map((row) => Number(row.runId))
+  );
+}
+
+// Guarded on runId still being null so a re-run of the pass (or an
+// overlapping cron invocation) can't relink an already-linked schedule.
+export async function linkScheduleRun(
+  id: string,
+  runId: number,
+  runUrl: string,
+  conclusion: string | null
+) {
+  return prisma.schedule.updateMany({
+    where: { id, status: "triggered", runId: null },
+    data: {
+      runId: BigInt(runId),
+      runUrl,
+      runConclusion: conclusion,
+    },
+  });
+}
+
+// Guarded on runConclusion still being null so a conclusion, once recorded,
+// is never clobbered.
+export async function setRunConclusion(id: string, conclusion: string) {
+  return prisma.schedule.updateMany({
+    where: { id, status: "triggered", runConclusion: null },
+    data: { runConclusion: conclusion },
+  });
+}
+
+export async function timeoutUnresolvedSchedules(cutoff: Date) {
+  return prisma.schedule.updateMany({
+    where: {
+      status: "triggered",
+      runConclusion: null,
+      triggeredAt: { lt: cutoff },
+    },
+    data: { runConclusion: "unknown" },
+  });
+}
