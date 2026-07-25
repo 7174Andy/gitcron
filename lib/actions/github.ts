@@ -278,10 +278,15 @@ export async function listWorkflowRunsWithToken(
 ): Promise<ListWorkflowRunsResult> {
   try {
     const workflowId = workflowPath.split("/").pop();
+    // GitHub's `created` qualifier expects YYYY-MM-DDTHH:MM:SS+00:00 or
+    // ...SSZ - no fractional seconds. `createdAfter` is typically produced
+    // via `Date#toISOString()`, which always includes milliseconds, so strip
+    // them here to keep the query well-formed regardless of caller.
+    const createdAfterParam = createdAfter.replace(/\.\d{3}Z$/, "Z");
     const params = new URLSearchParams({
       event: "workflow_dispatch",
       branch,
-      created: `>=${createdAfter}`,
+      created: `>=${createdAfterParam}`,
       per_page: "100",
     });
 

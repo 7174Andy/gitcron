@@ -68,6 +68,38 @@ describe("listWorkflowRunsWithToken", () => {
     expect(url.searchParams.get("created")).toBe(">=2026-07-24T11:58:00Z");
   });
 
+  it("strips milliseconds from createdAfter so GitHub's created qualifier accepts it", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ workflow_runs: [] }));
+
+    await listWorkflowRunsWithToken(
+      "tok",
+      "o",
+      "r",
+      ".github/workflows/ci.yml",
+      "main",
+      "2026-07-24T11:58:00.123Z"
+    );
+
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(url.searchParams.get("created")).toBe(">=2026-07-24T11:58:00Z");
+  });
+
+  it("passes an already-clean createdAfter through unchanged", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ workflow_runs: [] }));
+
+    await listWorkflowRunsWithToken(
+      "tok",
+      "o",
+      "r",
+      ".github/workflows/ci.yml",
+      "main",
+      "2026-07-24T11:58:00Z"
+    );
+
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(url.searchParams.get("created")).toBe(">=2026-07-24T11:58:00Z");
+  });
+
   it("returns success with an empty list when GitHub has no matching runs", async () => {
     fetchMock.mockResolvedValue(jsonResponse({ workflow_runs: [] }));
 
