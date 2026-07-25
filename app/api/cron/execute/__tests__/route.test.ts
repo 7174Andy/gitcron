@@ -183,5 +183,43 @@ describe("GET /api/cron/execute", () => {
       // locate step and hit the rejecting mock, so errors is exactly 2.
       expect(body.resolution).toMatchObject({ errors: 2 });
     });
+
+    it("resolves triggered schedules even when zero schedules are due", async () => {
+      const recentTrigger = new Date(Date.now() - 60_000);
+      // No pending due schedules, only a previously-triggered one awaiting resolution
+      fakeStore.schedule = createFakeScheduleStore([
+        makeScheduleRow({
+          id: "unresolved",
+          status: "triggered",
+          triggeredAt: recentTrigger,
+          workflowPath: ".github/workflows/test.yml",
+          workflowName: "Test",
+        }),
+      ]);
+      listRunsMock.mockResolvedValue({
+        success: true,
+        runs: [
+          {
+            id: 123,
+            htmlUrl: "https://github.com/o/r/actions/runs/123",
+            status: "completed",
+            conclusion: "success",
+            createdAt: new Date(recentTrigger.getTime() + 5_000).toISOString(),
+          },
+        ],
+      });
+
+      const response = await GET(makeRequest());
+      const body = await response.json();
+
+      // Resolution pass runs even though processed is 0
+      expect(response.status).toBe(200);
+      expect(body.processed).toBe(0);
+      expect(body.triggered).toBe(0);
+      expect(body.resolution).toMatchObject({ linked: 1, resolved: 1 });
+      const rows = new Map(fakeStore.schedule.rowsSnapshot().map((r) => [r.id, r]));
+      expect(rows.get("unresolved")!.runUrl).toBe("https://github.com/o/r/actions/runs/123");
+      expect(rows.get("unresolved")!.runConclusion).toBe("success");
+    });
   });
 });
