@@ -75,8 +75,8 @@ gitignored; production values belong in the Vercel dashboard, not on a
 development machine.
 
 > **Use the `db:*` scripts for Prisma.** The Prisma CLI reads only `.env` and has
-> no knowledge of `.env.local`, so `npx prisma db push` typed by hand would use
-> whatever `.env` holds. `npm run db:push` and `npm run db:studio` go through
+> no knowledge of `.env.local`, so `npx prisma migrate dev` typed by hand would
+> use whatever `.env` holds. Every `db:*` script goes through
 > `scripts/prisma.mjs`, which loads `.env.local` first — matching Next's
 > precedence — and refuses to touch the production database. Keeping no
 > production `DATABASE_URL` in `.env` removes the last thing a stray command
@@ -136,19 +136,42 @@ DATABASE_URL=postgresql://postgres:dev@localhost:5433/gitcron_dev
 ```
 
 Port 5433 avoids colliding with a Homebrew Postgres on 5432. Then apply the
-schema, either way:
+migrations, either way:
 
 ```bash
-npm run db:push
+npm run db:deploy
 ```
 
 | Script | Effect |
 |---|---|
 | `npm run db:up` | Start the local database, waiting until it accepts connections |
 | `npm run db:down` | Stop it, keeping the data |
-| `npm run db:push` | Apply `prisma/schema.prisma` to whatever `DATABASE_URL` names |
-| `npm run db:reset` | Destroy the local data and re-apply the schema |
+| `npm run db:deploy` | Apply existing migrations to whatever `DATABASE_URL` names |
+| `npm run db:migrate` | Create a migration for a `schema.prisma` edit, and apply it |
+| `npm run db:status` | Show which migrations the database has |
+| `npm run db:push` | Apply the schema *without* writing a migration — scratch use only |
+| `npm run db:reset` | Destroy the local data and re-apply the migrations |
 | `npm run db:studio` | Browse the rows in Prisma Studio |
+
+### Changing the schema
+
+`prisma/migrations/` is the source of truth, not `schema.prisma` alone. Edit the
+schema, then:
+
+```bash
+npm run db:migrate
+```
+
+Commit the generated `prisma/migrations/` directory with the schema change. The
+production build applies it (see [Deploying schema
+changes](#deploying-schema-changes)).
+
+> Do not use `npm run db:push` for a change you intend to commit. It alters the
+> database to match the schema without recording a migration, so the deployed
+> build has nothing to apply and production silently keeps the old columns —
+> which is exactly how `Schedule.runUrl` and `Schedule.runConclusion` reached
+> production missing, breaking schedule creation and listing outright and
+> erroring the run-resolution pass on every cron tick.
 
 ### 6. Run the development server
 
@@ -211,8 +234,23 @@ npm run build     # Production build
 
 Tests live in `__tests__` directories beside the code they cover and mock
 `@/lib/db`, `@/auth`, and `@/lib/crypto`, so none of them need a database or
-network. `npm run build` runs `prisma generate` first, which does not connect to
-anything either.
+network. A local `npm run build` runs `prisma generate`, which does not connect
+to anything, and skips the migration step — that step requires `VERCEL_ENV`, so
+building locally never migrates the database you happen to be pointed at.
+
+### Deploying schema changes
+
+`npm run build` runs `scripts/migrate-deploy.mjs` between `prisma generate` and
+`next build`. On a production Vercel build it runs `prisma migrate deploy`;
+everywhere else it prints why it is skipping.
+
+Preview builds skip it deliberately: a preview pointed at the production
+database would apply an unmerged branch's migrations to production. If preview
+deployments get their own database, drop that gate so previews migrate too.
+
+A production build with no `DATABASE_URL` fails rather than skipping. Skipping
+would restore the silence this script exists to remove, and failing is the safe
+direction — Vercel keeps serving the previous deployment.
 
 ## Development safeguards
 
@@ -279,9 +317,15 @@ than dotenv's — an unbalanced quote breaks it. Prefer unquoted values; dotenv
 does not need quotes and a stray one ends up *inside* the value. The `db:*`
 scripts point Compose at `docker/`, so a root `.env` no longer affects them.
 
-**`prisma db push` used a database you didn't expect.** The Prisma CLI reads only
-`.env`. Use `npm run db:push` and `npm run db:studio`, which load `.env.local`
-first.
+**A Prisma command used a database you didn't expect.** The Prisma CLI reads only
+`.env`. Use the `db:*` scripts, which load `.env.local` first.
+
+**`The column Schedule.<name> does not exist in the current database`.** The
+running Prisma Client expects a column the database lacks: a schema change
+reached that environment without its migration. Check with `npm run db:status`,
+and apply with `npm run db:deploy`. If the migration was never written — the
+schema was changed with `db:push` — recreate it with `npm run db:migrate` and
+commit `prisma/migrations/`.
 
 **Port 5433 already in use.** Something else holds it — `npm run db:down`, or
 change the host side of the port mapping in `docker/docker-compose.yml`.
@@ -300,6 +344,10 @@ change the host side of the port mapping in `docker/docker-compose.yml`.
    - `CRON_SECRET`
    - `ENCRYPTION_KEY`
 4. Deploy
+
+`DATABASE_URL` must be exposed to the **Build** step, not only the runtime — the
+production build runs `prisma migrate deploy` and fails without it. See
+[Deploying schema changes](#deploying-schema-changes).
 
 ### Create a production GitHub OAuth App
 
