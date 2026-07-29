@@ -156,24 +156,63 @@ npm run db:push
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+Open [http://localhost:3000](http://localhost:3000), sign in, and then **open the
+repository dropdown**. That is the check that matters: signing in only proves the
+callback worked, while a populated repository list proves the access token and
+its `repo` and `workflow` scopes survived into the session — every GitHub call in
+`lib/actions/github.ts` reads `session.accessToken`. A successful sign-in with an
+empty dropdown means the session exists but the token is unusable.
 
-### 7. Test the cron endpoint (local development)
+### 7. Test the cron endpoint
 
-The cron job doesn't run automatically in development. Test it manually:
+Nothing schedules the cron locally, so trigger it yourself. This reads
+`CRON_SECRET` from `.env.local` rather than making you paste it:
 
 ```bash
-curl -H "Authorization: Bearer YOUR_CRON_SECRET" http://localhost:3000/api/cron/execute
+SECRET=$(node -e 'require("dotenv").config({path:".env.local",quiet:true});process.stdout.write(process.env.CRON_SECRET)')
+curl -s -H "Authorization: Bearer $SECRET" http://localhost:3000/api/cron/execute
 ```
 
-Or run a loop to simulate production:
+With nothing due you get `{"message":"No schedules due",...}`. To exercise the
+whole path, add a workflow to a repository you don't mind dispatching:
+
+```yaml
+# .github/workflows/gitcron-test.yml
+name: GitCron Test
+on: workflow_dispatch
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "dispatched at $(date -u)"
+```
+
+Schedule it a couple of minutes out, then call the endpoint again — `triggered`
+becomes 1. Call it once more a minute later and the resolution pass fills in
+`runId`, `runUrl`, and `runConclusion`. `npm run db:studio` shows the rows.
+
+Or run a loop to imitate production:
 
 ```bash
 while true; do
-  curl -s -H "Authorization: Bearer YOUR_CRON_SECRET" http://localhost:3000/api/cron/execute
+  curl -s -H "Authorization: Bearer $SECRET" http://localhost:3000/api/cron/execute
   sleep 60
 done
 ```
+
+## Checks
+
+```bash
+npm test          # Vitest, unit tests
+npm run lint      # ESLint
+npx tsc --noEmit  # Type check
+npm run build     # Production build
+```
+
+Tests live in `__tests__` directories beside the code they cover and mock
+`@/lib/db`, `@/auth`, and `@/lib/crypto`, so none of them need a database or
+network. `npm run build` runs `prisma generate` first, which does not connect to
+anything either.
 
 ## Development safeguards
 
@@ -205,6 +244,47 @@ say — set `ALLOW_REMOTE_DB=1`.
 > Rotating the production database's credentials invalidates the fingerprint,
 > and the guard then stops recognising production. Recompute it with the command
 > in the comment above `PROD_DB_USER_SHA256`.
+
+## Troubleshooting
+
+**`DATABASE_URL is the production database` on startup.** The guard working as
+intended. Usually the cause is not a wrong value but a *missing* one:
+`.env.local` overrides `.env` **per key**, so a `DATABASE_URL` absent from
+`.env.local` silently falls through to whatever `.env` holds. Set it explicitly,
+and keep no production `DATABASE_URL` in `.env`.
+
+**Sign-in fails with a redirect URI mismatch.** The OAuth App whose
+`GITHUB_CLIENT_ID` you are using does not have
+`http://localhost:3000/api/auth/callback/github` as its callback. One app cannot
+hold two callback URLs — register a separate dev app (step 3). Check which
+client ID is actually being sent:
+
+```bash
+curl -s -c /tmp/cj http://localhost:3000/api/auth/csrf >/dev/null
+CSRF=$(curl -s -b /tmp/cj http://localhost:3000/api/auth/csrf | sed -E 's/.*"csrfToken":"([^"]*)".*/\1/')
+curl -s -b /tmp/cj -o /dev/null -D - -X POST http://localhost:3000/api/auth/signin/github \
+  --data-urlencode "csrfToken=$CSRF" | grep -io "client_id=[^&]*\|redirect_uri=[^&]*"
+```
+
+**Sign-in redirects somewhere unexpected.** Check for an `AUTH_URL` left in
+either env file. `next-auth` rewrites the request origin to it, so a value copied
+from production sends the callback to the deployed site.
+
+**`Missing or empty auth environment variables`.** Blank counts as missing.
+`cp .env.example .env.local` leaves every key present but empty.
+
+**`docker compose` fails with `unexpected character "\"" in variable name`.**
+Compose reads an env file in its project directory and its parser is stricter
+than dotenv's — an unbalanced quote breaks it. Prefer unquoted values; dotenv
+does not need quotes and a stray one ends up *inside* the value. The `db:*`
+scripts point Compose at `docker/`, so a root `.env` no longer affects them.
+
+**`prisma db push` used a database you didn't expect.** The Prisma CLI reads only
+`.env`. Use `npm run db:push` and `npm run db:studio`, which load `.env.local`
+first.
+
+**Port 5433 already in use.** Something else holds it — `npm run db:down`, or
+change the host side of the port mapping in `docker/docker-compose.yml`.
 
 ## Deployment
 

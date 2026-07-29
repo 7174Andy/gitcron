@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Stale copies of this repo left behind by git worktrees.
+    ".claude/**",
   ]),
 ]);
 
