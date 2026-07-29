@@ -8,6 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
+    "db:up": "docker compose -f docker/docker-compose.yml up -d --wait postgres",
+    "db:down": "docker compose -f docker/docker-compose.yml stop postgres",
+    "db:push": "node scripts/check-dev-db.mjs && prisma db push",
+    "db:reset": "node scripts/check-dev-db.mjs && docker compose -f docker/docker-compose.yml down -v && npm run db:up && npm run db:push",
     "postinstall": "prisma generate"
   },
   "dependencies": {

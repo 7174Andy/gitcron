@@ -24,8 +24,9 @@ Schedule GitHub Actions workflows to run at specific times. GitCron provides a s
 ### Prerequisites
 
 - Node.js 18+
-- PostgreSQL database (local or cloud like [Neon](https://neon.tech))
 - A GitHub account (you'll register your own OAuth App in step 3)
+- A development database — either one from [Prisma](https://console.prisma.io)
+  or Docker, to run Postgres locally (step 5)
 
 ### 1. Clone the repository
 
@@ -66,11 +67,14 @@ need to be shared.
 ### 4. Set up environment variables
 
 ```bash
-cp .env.example .env.local
+cp .env.example .env
 ```
 
-Next.js loads `.env.local` ahead of `.env`, so your local values take precedence.
-Both are gitignored.
+Use `.env`, not `.env.local`. Next.js reads both, but **the Prisma CLI reads only
+`.env`** — a `DATABASE_URL` in `.env.local` is invisible to `prisma db push`,
+which would silently use whatever `.env` says instead. Keeping one file removes
+the chance of the app and the CLI disagreeing about which database they mean.
+Both are gitignored; production values belong in the Vercel dashboard.
 
 ```env
 # GitHub OAuth App from step 3
@@ -80,8 +84,8 @@ GITHUB_CLIENT_SECRET=your-client-secret
 # Auth.js - Generate with: openssl rand -base64 32
 AUTH_SECRET=your-auth-secret
 
-# PostgreSQL Database
-DATABASE_URL=postgresql://user:password@localhost:5432/gitcron
+# Development database - see step 5
+DATABASE_URL=
 
 # Cron Authentication - Generate with: openssl rand -base64 32
 CRON_SECRET=your-cron-secret
@@ -91,15 +95,53 @@ CRON_SECRET=your-cron-secret
 ENCRYPTION_KEY=your-encryption-key
 ```
 
-`AUTH_SECRET`, `GITHUB_CLIENT_ID`, and `GITHUB_CLIENT_SECRET` are validated at
-startup. A missing or blank value fails immediately with setup instructions
-rather than surfacing as an opaque error partway through sign-in.
+`AUTH_SECRET`, `GITHUB_CLIENT_ID`, and `GITHUB_CLIENT_SECRET` are validated when
+the server starts. A missing or blank value fails immediately with setup
+instructions rather than surfacing as an opaque error partway through sign-in.
 
 ### 5. Set up the database
 
-```bash
-npx prisma db push
+**Never point `DATABASE_URL` at production.** A schedule is a row, and the
+deployed cron executes every due row it finds — so a schedule created while
+testing locally dispatches a real workflow against a real repository, and
+nothing on your machine shows that it happened. The server refuses to start if
+it recognises the production database (see
+[Development safeguards](#development-safeguards)).
+
+Pick either option.
+
+**Option A — a Prisma development database.** Create one at
+[console.prisma.io](https://console.prisma.io) and copy its connection string
+into `DATABASE_URL`:
+
+```env
+DATABASE_URL=postgres://<user>:<password>@db.prisma.io:5432/postgres?sslmode=require
 ```
+
+**Option B — Postgres locally via Docker.** No account needed and it works
+offline:
+
+```bash
+npm run db:up
+```
+
+```env
+DATABASE_URL=postgresql://postgres:dev@localhost:5433/gitcron_dev
+```
+
+Port 5433 avoids colliding with a Homebrew Postgres on 5432. Then apply the
+schema, either way:
+
+```bash
+npm run db:push
+```
+
+| Script | Effect |
+|---|---|
+| `npm run db:up` | Start the local database, waiting until it accepts connections |
+| `npm run db:down` | Stop it, keeping the data |
+| `npm run db:push` | Apply `prisma/schema.prisma` to whatever `DATABASE_URL` names |
+| `npm run db:reset` | Destroy the local data and re-apply the schema |
 
 ### 6. Run the development server
 
@@ -125,6 +167,36 @@ while true; do
   sleep 60
 done
 ```
+
+## Development safeguards
+
+Two checks run outside production, both in `lib/env.ts`, called from
+`instrumentation.ts` when the server starts.
+
+**Auth configuration.** `AUTH_SECRET`, `GITHUB_CLIENT_ID`, and
+`GITHUB_CLIENT_SECRET` must be present and non-blank. Blank counts as missing on
+purpose: `cp .env.example .env` leaves every key present but empty, and
+`@auth/core` fills provider credentials with `??=`, so `""` is not nullish, never
+falls back to `AUTH_GITHUB_ID`, and reaches GitHub as an empty `client_id`.
+
+**Production database.** Every Prisma Postgres database is reached at
+`db.prisma.io:5432/postgres`, so development and production differ only in their
+credentials and no hostname check can tell them apart. Instead
+`lib/dev-db-guard.mjs` holds a SHA-256 of the production database's username and
+the server refuses to start if `DATABASE_URL` matches it. The hash of a
+64-character opaque identifier is not reversible, so it is safe to commit — and
+it means no production credential has to live on a development machine.
+
+The same check runs before `db:push` and `db:reset` via
+`scripts/check-dev-db.mjs`, because the Prisma CLI never loads the app and a
+schema push is worse than a stray row.
+
+To use the production database deliberately — reading a real row while debugging,
+say — set `ALLOW_REMOTE_DB=1`.
+
+> Rotating the production database's credentials invalidates the fingerprint,
+> and the guard then stops recognising production. Recompute it with the command
+> in the comment above `PROD_DB_USER_SHA256`.
 
 ## Deployment
 
