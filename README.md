@@ -25,7 +25,7 @@ Schedule GitHub Actions workflows to run at specific times. GitCron provides a s
 
 - Node.js 18+
 - PostgreSQL database (local or cloud like [Neon](https://neon.tech))
-- GitHub OAuth App
+- A GitHub account (you'll register your own OAuth App in step 3)
 
 ### 1. Clone the repository
 
@@ -40,40 +40,60 @@ cd gitcron
 npm install
 ```
 
-### 3. Set up environment variables
+### 3. Local development authentication
 
-Copy the example environment file:
+A GitHub OAuth App allows exactly **one** authorization callback URL, so the
+deployed site's credentials cannot also serve `localhost`. Register your own app
+for development:
+
+1. Go to [GitHub Developer Settings](https://github.com/settings/developers)
+2. Click **New OAuth App**
+3. Fill in:
+   - **Application name:** GitCron (dev)
+   - **Homepage URL:** `http://localhost:3000`
+   - **Authorization callback URL:** `http://localhost:3000/api/auth/callback/github`
+4. Click **Register application**, then **Generate a new client secret**
+
+Keep this app separate from the one the deployed site uses — see
+[Deployment](#deployment). The dev app is yours alone; its credentials never
+need to be shared.
+
+> **Don't set `AUTH_URL` locally.** Auth.js infers the origin from the incoming
+> request and already trusts the host whenever `NODE_ENV` isn't `production`.
+> Setting it rewrites the request origin, so a value copied from production
+> silently breaks localhost sign-in.
+
+### 4. Set up environment variables
 
 ```bash
-cp .env.example .env
+cp .env.example .env.local
 ```
 
-Fill in the required values:
+Next.js loads `.env.local` ahead of `.env`, so your local values take precedence.
+Both are gitignored.
 
 ```env
-# NextAuth.js - Generate with: openssl rand -base64 32
-AUTH_SECRET=your-auth-secret
-
-# GitHub OAuth App (https://github.com/settings/developers)
+# GitHub OAuth App from step 3
 GITHUB_CLIENT_ID=your-client-id
 GITHUB_CLIENT_SECRET=your-client-secret
+
+# Auth.js - Generate with: openssl rand -base64 32
+AUTH_SECRET=your-auth-secret
 
 # PostgreSQL Database
 DATABASE_URL=postgresql://user:password@localhost:5432/gitcron
 
 # Cron Authentication - Generate with: openssl rand -base64 32
 CRON_SECRET=your-cron-secret
+
+# Token encryption (32 bytes, base64 encoded)
+# Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+ENCRYPTION_KEY=your-encryption-key
 ```
 
-### 4. Create a GitHub OAuth App
-
-1. Go to [GitHub Developer Settings](https://github.com/settings/developers)
-2. Click "New OAuth App"
-3. Fill in:
-   - **Application name:** GitCron
-   - **Homepage URL:** `http://localhost:3000`
-   - **Authorization callback URL:** `http://localhost:3000/api/auth/callback/github`
-4. Copy the Client ID and Client Secret to your `.env` file
+`AUTH_SECRET`, `GITHUB_CLIENT_ID`, and `GITHUB_CLIENT_SECRET` are validated at
+startup. A missing or blank value fails immediately with setup instructions
+rather than surfacing as an opaque error partway through sign-in.
 
 ### 5. Set up the database
 
@@ -118,13 +138,21 @@ done
    - `GITHUB_CLIENT_SECRET`
    - `DATABASE_URL`
    - `CRON_SECRET`
+   - `ENCRYPTION_KEY`
 4. Deploy
 
-### Update GitHub OAuth App
+### Create a production GitHub OAuth App
 
-After deployment, update your GitHub OAuth App:
+Register a **second** OAuth App for the deployed site rather than repointing your
+dev app — one app cannot hold both callback URLs, and editing it would break
+local sign-in for everyone using it:
+
+- **Application name:** GitCron
 - **Homepage URL:** `https://your-app.vercel.app`
 - **Authorization callback URL:** `https://your-app.vercel.app/api/auth/callback/github`
+
+Use this app's Client ID and Client Secret for the Vercel environment variables
+above. Your `.env.local` keeps the dev app's credentials.
 
 ### Set up cron-job.org
 
