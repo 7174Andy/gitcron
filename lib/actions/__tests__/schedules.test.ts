@@ -10,12 +10,14 @@ const { fakeStore } = vi.hoisted(() => ({
 
 vi.mock("@/lib/db", () => ({ prisma: fakeStore }));
 vi.mock("@/auth", () => ({ auth: vi.fn() }));
+vi.mock("@/lib/auth/access-token", () => ({ getGitHubAccessToken: vi.fn() }));
 vi.mock("@/lib/crypto", () => ({
   encrypt: (value: string) => `enc:${value}`,
   decrypt: (value: string) => value.replace(/^enc:/, ""),
 }));
 
 import { auth } from "@/auth";
+import { getGitHubAccessToken } from "@/lib/auth/access-token";
 import {
   claimSchedule,
   getDueScheduleIds,
@@ -41,10 +43,12 @@ const getSession = auth as unknown as () => Promise<Session | null>;
 function mockSession() {
   const session: Session = {
     expires: "2099-01-01T00:00:00.000Z",
-    accessToken: "fresh-token",
     user: { id: "user-1" },
   };
   vi.mocked(getSession).mockResolvedValue(session);
+  // The access token is read from the JWT rather than the session, so it is
+  // mocked separately -- see lib/auth/access-token.ts.
+  vi.mocked(getGitHubAccessToken).mockResolvedValue("fresh-token");
 }
 
 function makePayload(overrides: Partial<SchedulePayload> = {}): SchedulePayload {

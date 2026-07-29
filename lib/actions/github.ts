@@ -1,6 +1,6 @@
 "use server";
 
-import { auth } from "@/auth";
+import { getGitHubAccessToken } from "@/lib/auth/access-token";
 import { parse as parseYaml } from "yaml";
 import type {
   GitHubRepository,
@@ -15,9 +15,9 @@ export interface WorkflowDispatchResult {
 }
 
 export async function fetchRepositories(): Promise<GitHubRepository[]> {
-  const session = await auth();
+  const accessToken = await getGitHubAccessToken();
 
-  if (!session?.accessToken) {
+  if (!accessToken) {
     throw new Error("Not authenticated");
   }
 
@@ -25,7 +25,7 @@ export async function fetchRepositories(): Promise<GitHubRepository[]> {
     "https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member",
     {
       headers: {
-        Authorization: `Bearer ${session.accessToken}`,
+        Authorization: `Bearer ${accessToken}`,
         Accept: "application/vnd.github.v3+json",
       },
     },
@@ -42,9 +42,9 @@ export async function fetchWorkflows(
   owner: string,
   repo: string,
 ): Promise<WorkflowFile[]> {
-  const session = await auth();
+  const accessToken = await getGitHubAccessToken();
 
-  if (!session?.accessToken) {
+  if (!accessToken) {
     throw new Error("Not authenticated");
   }
 
@@ -52,7 +52,7 @@ export async function fetchWorkflows(
     `https://api.github.com/repos/${owner}/${repo}/contents/.github/workflows`,
     {
       headers: {
-        Authorization: `Bearer ${session.accessToken}`,
+        Authorization: `Bearer ${accessToken}`,
         Accept: "application/vnd.github.v3+json",
       },
     },
@@ -84,9 +84,9 @@ export async function fetchWorkflowInputs(
   repo: string,
   workflowPath: string
 ): Promise<WorkflowInput[]> {
-  const session = await auth();
+  const accessToken = await getGitHubAccessToken();
 
-  if (!session?.accessToken) {
+  if (!accessToken) {
     throw new Error("Not authenticated");
   }
 
@@ -96,7 +96,7 @@ export async function fetchWorkflowInputs(
       `https://api.github.com/repos/${owner}/${repo}/contents/${workflowPath}`,
       {
         headers: {
-          Authorization: `Bearer ${session.accessToken}`,
+          Authorization: `Bearer ${accessToken}`,
           Accept: "application/vnd.github.v3.raw",
         },
       }
@@ -149,14 +149,14 @@ export async function triggerWorkflowDispatch(
   ref: string = "main",
   inputs?: Record<string, string>,
 ): Promise<WorkflowDispatchResult> {
-  const session = await auth();
+  const accessToken = await getGitHubAccessToken();
 
-  if (!session?.accessToken) {
+  if (!accessToken) {
     return { success: false, error: "Not authenticated" };
   }
 
   return triggerWorkflowDispatchWithToken(
-    session.accessToken,
+    accessToken,
     owner,
     repo,
     workflowPath,

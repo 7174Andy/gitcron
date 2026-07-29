@@ -1,5 +1,6 @@
 import NextAuth from "next-auth";
 import GitHub from "next-auth/providers/github";
+import { buildClientSession, persistGitHubIdentity } from "@/lib/auth/callbacks";
 import { assertAuthEnv } from "@/lib/env";
 
 assertAuthEnv();
@@ -18,24 +19,13 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     }),
   ],
   callbacks: {
+    // Both live in lib/auth/callbacks.ts so the boundary they draw -- access
+    // token in the JWT, never in the session -- is unit-testable.
     async jwt({ token, account, profile }) {
-      // Persist the OAuth access token and user ID to the JWT
-      if (account) {
-        token.accessToken = account.access_token;
-      }
-      if (profile) {
-        // GitHub profile includes the user's ID
-        token.userId = String(profile.id);
-      }
-      return token;
+      return persistGitHubIdentity({ token, account, profile });
     },
     async session({ session, token }) {
-      // Send the access token and user ID to the client
-      session.accessToken = token.accessToken as string;
-      if (session.user) {
-        session.user.id = token.userId as string;
-      }
-      return session;
+      return buildClientSession({ session, token });
     },
   },
 });
