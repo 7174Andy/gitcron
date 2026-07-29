@@ -58,7 +58,7 @@ describe("assertAuthEnv", () => {
     expect(error.message).toContain(
       "http://localhost:3000/api/auth/callback/github",
     );
-    expect(error.message).toContain(".env");
+    expect(error.message).toContain(".env.local");
   });
 
   it("does not require unrelated variables", () => {
@@ -108,6 +108,7 @@ describe("assertNotProductionDatabase", () => {
 
     expect(error.message).toContain("production cron");
     expect(error.message).toContain("console.prisma.io");
+    expect(error.message).toContain(".env.local");
     expect(error.message).toContain("npm run db:up");
     expect(error.message).toContain("ALLOW_REMOTE_DB");
   });

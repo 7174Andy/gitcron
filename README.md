@@ -67,14 +67,20 @@ need to be shared.
 ### 4. Set up environment variables
 
 ```bash
-cp .env.example .env
+cp .env.example .env.local
 ```
 
-Use `.env`, not `.env.local`. Next.js reads both, but **the Prisma CLI reads only
-`.env`** — a `DATABASE_URL` in `.env.local` is invisible to `prisma db push`,
-which would silently use whatever `.env` says instead. Keeping one file removes
-the chance of the app and the CLI disagreeing about which database they mean.
-Both are gitignored; production values belong in the Vercel dashboard.
+Keep local development in `.env.local` and leave `.env` out of it. Both are
+gitignored; production values belong in the Vercel dashboard, not on a
+development machine.
+
+> **Use the `db:*` scripts for Prisma.** The Prisma CLI reads only `.env` and has
+> no knowledge of `.env.local`, so `npx prisma db push` typed by hand would use
+> whatever `.env` holds. `npm run db:push` and `npm run db:studio` go through
+> `scripts/prisma.mjs`, which loads `.env.local` first — matching Next's
+> precedence — and refuses to touch the production database. Keeping no
+> production `DATABASE_URL` in `.env` removes the last thing a stray command
+> could find.
 
 ```env
 # GitHub OAuth App from step 3
@@ -142,6 +148,7 @@ npm run db:push
 | `npm run db:down` | Stop it, keeping the data |
 | `npm run db:push` | Apply `prisma/schema.prisma` to whatever `DATABASE_URL` names |
 | `npm run db:reset` | Destroy the local data and re-apply the schema |
+| `npm run db:studio` | Browse the rows in Prisma Studio |
 
 ### 6. Run the development server
 
@@ -175,7 +182,7 @@ Two checks run outside production, both in `lib/env.ts`, called from
 
 **Auth configuration.** `AUTH_SECRET`, `GITHUB_CLIENT_ID`, and
 `GITHUB_CLIENT_SECRET` must be present and non-blank. Blank counts as missing on
-purpose: `cp .env.example .env` leaves every key present but empty, and
+purpose: `cp .env.example .env.local` leaves every key present but empty, and
 `@auth/core` fills provider credentials with `??=`, so `""` is not nullish, never
 falls back to `AUTH_GITHUB_ID`, and reaches GitHub as an empty `client_id`.
 
@@ -187,9 +194,10 @@ the server refuses to start if `DATABASE_URL` matches it. The hash of a
 64-character opaque identifier is not reversible, so it is safe to commit — and
 it means no production credential has to live on a development machine.
 
-The same check runs before `db:push` and `db:reset` via
-`scripts/check-dev-db.mjs`, because the Prisma CLI never loads the app and a
-schema push is worse than a stray row.
+The same check runs in `scripts/prisma.mjs`, which every `db:*` script goes
+through, because the Prisma CLI never loads the app and a schema push is worse
+than a stray row. That wrapper also loads `.env.local` ahead of `.env` so the CLI
+and the app agree on which database they mean — the CLI alone reads only `.env`.
 
 To use the production database deliberately — reading a real row while debugging,
 say — set `ALLOW_REMOTE_DB=1`.

@@ -18,7 +18,7 @@ serve http://localhost:3000.
        Application name: GitCron (dev)
        Homepage URL:     http://localhost:3000
        Callback URL:     http://localhost:3000/api/auth/callback/github
-  2. Put its Client ID and Client Secret in .env
+  2. Put its Client ID and Client Secret in .env.local
   3. Generate AUTH_SECRET with: openssl rand -base64 32
 
 Do not set AUTH_URL locally -- Auth.js infers the origin from the request and
@@ -81,7 +81,7 @@ dispatches a real workflow against a real repository. Nothing on this machine
 would show that it happened.
 
 Use your development database instead -- copy its connection string from
-https://console.prisma.io and set DATABASE_URL in .env.
+https://console.prisma.io and set DATABASE_URL in .env.local.
 
 Or run one locally:
 
