@@ -1,0 +1,34 @@
+# Local development database.
+#
+#   npm run db:up       start it (and wait until it accepts connections)
+#   npm run db:reset    destroy the data and re-apply the schema
+#   npm run db:down     stop it, keeping the data
+#
+# Port 5433 on purpose: 5432 is often taken by a Homebrew Postgres, and a
+# silent connection to the wrong server is worse than a refused one.
+#
+# This file lives in docker/ so that Compose treats this directory as the
+# project directory and looks for docker/.env. Run from the repository root it
+# would instead parse the root .env -- a file it has no use for here, since
+# nothing below is interpolated, but one it can still fail to parse.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gitcron-dev-db
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: gitcron_dev
+    volumes:
+      - gitcron-dev-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d gitcron_dev"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  gitcron-dev-db:

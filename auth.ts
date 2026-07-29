@@ -1,5 +1,8 @@
 import NextAuth from "next-auth";
 import GitHub from "next-auth/providers/github";
+import { assertAuthEnv } from "@/lib/env";
+
+assertAuthEnv();
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   providers: [
