@@ -1,6 +1,7 @@
 "use server";
 
 import { auth } from "@/auth";
+import { getGitHubAccessToken } from "@/lib/auth/access-token";
 import { prisma } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import type { SchedulePayload, ScheduleStatus } from "@/types/schedule";
@@ -71,8 +72,9 @@ export async function createSchedule(
 ): Promise<{ success: true; schedule: ScheduleResponse } | { success: false; error: string }> {
   try {
     const session = await auth();
+    const accessToken = await getGitHubAccessToken();
 
-    if (!session?.accessToken || !session?.user?.id) {
+    if (!accessToken || !session?.user?.id) {
       return { success: false, error: "Not authenticated" };
     }
 
@@ -89,7 +91,7 @@ export async function createSchedule(
         inputs: payload.inputs,
         scheduledAt: new Date(payload.scheduledAt),
         timezone: payload.timezone,
-        accessToken: encrypt(session.accessToken),
+        accessToken: encrypt(accessToken),
       },
       select: {
         id: true,
@@ -206,8 +208,9 @@ export async function updateSchedule(
 ): Promise<{ success: true; schedule: ScheduleResponse } | { success: false; error: string }> {
   try {
     const session = await auth();
+    const accessToken = await getGitHubAccessToken();
 
-    if (!session?.accessToken || !session?.user?.id) {
+    if (!accessToken || !session?.user?.id) {
       return { success: false, error: "Not authenticated" };
     }
 
@@ -231,7 +234,7 @@ export async function updateSchedule(
         inputs: payload.inputs,
         scheduledAt: new Date(payload.scheduledAt),
         timezone: payload.timezone,
-        accessToken: encrypt(session.accessToken),
+        accessToken: encrypt(accessToken),
       },
     });
 

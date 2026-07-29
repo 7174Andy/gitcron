@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/auth", () => ({ auth: vi.fn() }));
+vi.mock("@/lib/auth/access-token", () => ({ getGitHubAccessToken: vi.fn() }));
 
 import {
   listWorkflowRunsWithToken,
