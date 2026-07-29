@@ -6,6 +6,8 @@ import {
 } from "@/lib/actions/schedules";
 import { triggerWorkflowDispatchWithToken } from "@/lib/actions/github";
 import { decrypt } from "@/lib/crypto";
+import { resolveTriggeredSchedules } from "@/lib/cron/resolve-runs";
+import type { ResolutionSummary } from "@/lib/cron/resolve-runs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,16 +47,9 @@ export async function GET(request: Request) {
     const now = new Date();
     const dueScheduleIds = await getDueScheduleIds(now);
 
-    if (dueScheduleIds.length === 0) {
-      return NextResponse.json({
-        message: "No schedules due",
-        processed: 0,
-      });
-    }
-
     const results: ExecutionResult[] = [];
 
-    // Process each due schedule
+    // Process each due schedule (if any)
     for (const id of dueScheduleIds) {
       // Atomically claim the row (pending -> processing). If another
       // invocation already claimed it, or it was edited/rescheduled since
@@ -119,16 +114,30 @@ export async function GET(request: Request) {
       }
     }
 
+    // Post-dispatch: locate GitHub runs for triggered schedules and record
+    // their conclusions. Runs on every tick, even if no schedules were due.
+    // Isolated so a resolution failure can never mask the dispatch results above.
+    let resolution: ResolutionSummary | { error: string };
+    try {
+      resolution = await resolveTriggeredSchedules(now);
+    } catch (error) {
+      console.error("Run resolution pass failed:", error);
+      resolution = {
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
+    }
+
     const triggered = results.filter((r) => r.status === "triggered").length;
     const failed = results.filter((r) => r.status === "failed").length;
     const skipped = results.filter((r) => r.status === "skipped").length;
 
     return NextResponse.json({
-      message: `Processed ${results.length} schedules`,
+      message: dueScheduleIds.length === 0 ? "No schedules due" : `Processed ${results.length} schedules`,
       processed: results.length,
       triggered,
       failed,
       skipped,
+      resolution,
       results,
     });
   } catch (error) {

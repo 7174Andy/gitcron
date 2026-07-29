@@ -36,6 +36,11 @@ model Schedule {
   triggeredAt   DateTime?
   errorMessage  String?
 
+  // GitHub Actions run correlation (see docs/superpowers/specs/2026-07-24-run-result-tracking-design.md)
+  runId         BigInt?
+  runUrl        String?
+  runConclusion String?   // GitHub's conclusion verbatim, or "unknown" when we gave up
+
   // GitHub access token for execution (encrypted in production)
   accessToken   String
 

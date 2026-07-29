@@ -19,8 +19,14 @@ import { auth } from "@/auth";
 import {
   claimSchedule,
   getDueScheduleIds,
+  getSchedules,
   updateSchedule,
   updateScheduleStatus,
+  getUnresolvedSchedules,
+  getLinkedRunIds,
+  linkScheduleRun,
+  setRunConclusion,
+  timeoutUnresolvedSchedules,
 } from "@/lib/actions/schedules";
 
 const NOW = new Date("2026-07-24T12:00:00Z");
@@ -221,5 +227,167 @@ describe("updateScheduleStatus", () => {
     expect(result.count).toBe(0);
     const rows = fakeStore.schedule.rowsSnapshot();
     expect(rows.find((r) => r.id === "s1")?.status).toBe("triggered");
+  });
+});
+
+describe("run result fields", () => {
+  it("getSchedules exposes runUrl and runConclusion", async () => {
+    mockSession();
+    fakeStore.schedule = createFakeScheduleStore([
+      makeScheduleRow({
+        id: "s1",
+        status: "triggered",
+        runId: 123n,
+        runUrl: "https://github.com/octo-org/octo-repo/actions/runs/123",
+        runConclusion: "success",
+      }),
+    ]);
+
+    const result = await getSchedules();
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.schedules[0].runUrl).toBe(
+      "https://github.com/octo-org/octo-repo/actions/runs/123"
+    );
+    expect(result.schedules[0].runConclusion).toBe("success");
+  });
+});
+
+describe("fake store comparison operators", () => {
+  const T0 = new Date("2026-07-24T00:00:00Z");
+  const T1 = new Date("2026-07-24T01:00:00Z");
+  const T2 = new Date("2026-07-24T02:00:00Z");
+
+  it("supports gte and lt on Date fields", async () => {
+    const store = createFakeScheduleStore([
+      makeScheduleRow({ id: "old", triggeredAt: T0 }),
+      makeScheduleRow({ id: "mid", triggeredAt: T1 }),
+      makeScheduleRow({ id: "new", triggeredAt: T2 }),
+    ]);
+
+    const gte = await store.findMany({ where: { triggeredAt: { gte: T1 } }, select: { id: true } });
+    expect(gte.map((r) => r.id).sort()).toEqual(["mid", "new"]);
+
+    const lt = await store.findMany({ where: { triggeredAt: { lt: T1 } }, select: { id: true } });
+    expect(lt.map((r) => r.id)).toEqual(["old"]);
+  });
+
+  it("a null field never matches a comparison operator", async () => {
+    const store = createFakeScheduleStore([
+      makeScheduleRow({ id: "never-triggered", triggeredAt: null }),
+    ]);
+
+    const rows = await store.findMany({ where: { triggeredAt: { gte: T0 } }, select: { id: true } });
+    expect(rows).toEqual([]);
+  });
+});
+
+describe("resolution pass helpers", () => {
+  const CUTOFF = new Date("2026-07-23T12:00:00Z"); // now − 24h
+  const RECENT = new Date("2026-07-24T11:00:00Z");
+  const STALE = new Date("2026-07-22T11:00:00Z");
+
+  it("getUnresolvedSchedules returns triggered rows without a conclusion inside the window, oldest first", async () => {
+    fakeStore.schedule = createFakeScheduleStore([
+      makeScheduleRow({ id: "newer", status: "triggered", triggeredAt: RECENT }),
+      makeScheduleRow({
+        id: "older",
+        status: "triggered",
+        triggeredAt: new Date("2026-07-24T10:00:00Z"),
+      }),
+      makeScheduleRow({ id: "stale", status: "triggered", triggeredAt: STALE }),
+      makeScheduleRow({
+        id: "done",
+        status: "triggered",
+        triggeredAt: RECENT,
+        runConclusion: "success",
+      }),
+      makeScheduleRow({ id: "pending", status: "pending", triggeredAt: null }),
+      makeScheduleRow({ id: "failed", status: "failed", triggeredAt: null }),
+    ]);
+
+    const unresolved = await getUnresolvedSchedules(CUTOFF);
+
+    expect(unresolved.map((s) => s.id)).toEqual(["older", "newer"]);
+    expect(unresolved[0].accessToken).toBe("enc:ghp_token");
+  });
+
+  it("getLinkedRunIds returns run ids already claimed for a workflow", async () => {
+    fakeStore.schedule = createFakeScheduleStore([
+      makeScheduleRow({ id: "a", status: "triggered", runId: 100n }),
+      makeScheduleRow({ id: "b", status: "triggered", runId: null }),
+      makeScheduleRow({
+        id: "other-workflow",
+        status: "triggered",
+        runId: 200n,
+        workflowPath: ".github/workflows/deploy.yml",
+      }),
+    ]);
+
+    const linked = await getLinkedRunIds("octo-org/octo-repo", ".github/workflows/ci.yml");
+
+    expect(linked).toEqual(new Set([100]));
+  });
+
+  it("linkScheduleRun stores the run and won't overwrite an existing link", async () => {
+    fakeStore.schedule = createFakeScheduleStore([
+      makeScheduleRow({ id: "s1", status: "triggered", triggeredAt: RECENT }),
+    ]);
+
+    const first = await linkScheduleRun("s1", 100, "https://github.com/o/r/actions/runs/100", null);
+    expect(first.count).toBe(1);
+
+    const second = await linkScheduleRun("s1", 999, "https://example.com", null);
+    expect(second.count).toBe(0);
+
+    const row = fakeStore.schedule.rowsSnapshot()[0];
+    expect(row.runId).toBe(100n);
+    expect(row.runUrl).toBe("https://github.com/o/r/actions/runs/100");
+  });
+
+  it("linkScheduleRun can store a conclusion when the run already completed", async () => {
+    fakeStore.schedule = createFakeScheduleStore([
+      makeScheduleRow({ id: "s1", status: "triggered", triggeredAt: RECENT }),
+    ]);
+
+    await linkScheduleRun("s1", 100, "https://github.com/o/r/actions/runs/100", "success");
+
+    expect(fakeStore.schedule.rowsSnapshot()[0].runConclusion).toBe("success");
+  });
+
+  it("setRunConclusion resolves a schedule exactly once", async () => {
+    fakeStore.schedule = createFakeScheduleStore([
+      makeScheduleRow({ id: "s1", status: "triggered", triggeredAt: RECENT, runId: 100n }),
+    ]);
+
+    const first = await setRunConclusion("s1", "failure");
+    expect(first.count).toBe(1);
+
+    const second = await setRunConclusion("s1", "success");
+    expect(second.count).toBe(0);
+
+    expect(fakeStore.schedule.rowsSnapshot()[0].runConclusion).toBe("failure");
+  });
+
+  it("timeoutUnresolvedSchedules marks only stale unresolved rows as unknown", async () => {
+    fakeStore.schedule = createFakeScheduleStore([
+      makeScheduleRow({ id: "stale", status: "triggered", triggeredAt: STALE }),
+      makeScheduleRow({ id: "recent", status: "triggered", triggeredAt: RECENT }),
+      makeScheduleRow({
+        id: "stale-but-done",
+        status: "triggered",
+        triggeredAt: STALE,
+        runConclusion: "success",
+      }),
+    ]);
+
+    const result = await timeoutUnresolvedSchedules(CUTOFF);
+
+    expect(result.count).toBe(1);
+    const rows = new Map(fakeStore.schedule.rowsSnapshot().map((r) => [r.id, r]));
+    expect(rows.get("stale")!.runConclusion).toBe("unknown");
+    expect(rows.get("recent")!.runConclusion).toBeNull();
+    expect(rows.get("stale-but-done")!.runConclusion).toBe("success");
   });
 });

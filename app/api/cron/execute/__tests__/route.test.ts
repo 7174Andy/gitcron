@@ -5,9 +5,11 @@ import {
 } from "@/lib/actions/__tests__/fake-schedule-store";
 import type { FakeScheduleStore } from "@/lib/actions/__tests__/fake-schedule-store";
 
-const { fakeStore, dispatchMock } = vi.hoisted(() => ({
+const { fakeStore, dispatchMock, listRunsMock, getRunMock } = vi.hoisted(() => ({
   fakeStore: { schedule: null as unknown as FakeScheduleStore },
   dispatchMock: vi.fn(),
+  listRunsMock: vi.fn(),
+  getRunMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({ prisma: fakeStore }));
@@ -18,6 +20,8 @@ vi.mock("@/lib/crypto", () => ({
 }));
 vi.mock("@/lib/actions/github", () => ({
   triggerWorkflowDispatchWithToken: dispatchMock,
+  listWorkflowRunsWithToken: listRunsMock,
+  getWorkflowRunWithToken: getRunMock,
 }));
 
 import { GET } from "@/app/api/cron/execute/route";
@@ -36,6 +40,10 @@ beforeEach(() => {
   fakeStore.schedule = createFakeScheduleStore();
   dispatchMock.mockReset();
   dispatchMock.mockResolvedValue({ success: true });
+  listRunsMock.mockReset();
+  getRunMock.mockReset();
+  listRunsMock.mockResolvedValue({ success: true, runs: [] });
+  getRunMock.mockResolvedValue({ success: true, run: null });
 });
 
 describe("GET /api/cron/execute", () => {
@@ -110,5 +118,108 @@ describe("GET /api/cron/execute", () => {
 
     // And the row itself lands in a single terminal state, never double-triggered.
     expect(fakeStore.schedule.rowsSnapshot()[0].status).toBe("triggered");
+  });
+
+  describe("run resolution pass", () => {
+    it("dispatches due schedules and resolves triggered ones in the same invocation", async () => {
+      const recentTrigger = new Date(Date.now() - 60_000);
+      fakeStore.schedule = createFakeScheduleStore([
+        makeScheduleRow({ id: "due", status: "pending", scheduledAt: DUE_AT }),
+        makeScheduleRow({
+          id: "awaiting-run",
+          status: "triggered",
+          triggeredAt: recentTrigger,
+          workflowPath: ".github/workflows/deploy.yml",
+          workflowName: "Deploy",
+        }),
+      ]);
+      // Only the deploy workflow has a matching run; the just-dispatched ci
+      // schedule finds nothing this tick (GitHub lag) and stays unresolved.
+      listRunsMock.mockImplementation(async (_t, _o, _r, workflowPath: string) =>
+        workflowPath === ".github/workflows/deploy.yml"
+          ? {
+              success: true,
+              runs: [
+                {
+                  id: 77,
+                  htmlUrl: "https://github.com/o/r/actions/runs/77",
+                  status: "completed",
+                  conclusion: "success",
+                  createdAt: new Date(recentTrigger.getTime() + 5_000).toISOString(),
+                },
+              ],
+            }
+          : { success: true, runs: [] }
+      );
+
+      const response = await GET(makeRequest());
+      const body = await response.json();
+
+      expect(body.triggered).toBe(1);
+      expect(body.resolution).toMatchObject({ linked: 1, resolved: 1 });
+      const rows = new Map(fakeStore.schedule.rowsSnapshot().map((r) => [r.id, r]));
+      expect(rows.get("awaiting-run")!.runUrl).toBe("https://github.com/o/r/actions/runs/77");
+      expect(rows.get("awaiting-run")!.runConclusion).toBe("success");
+      expect(rows.get("due")!.status).toBe("triggered");
+    });
+
+    it("a resolution error doesn't mask dispatch results", async () => {
+      fakeStore.schedule = createFakeScheduleStore([
+        makeScheduleRow({ id: "due", status: "pending", scheduledAt: DUE_AT }),
+        makeScheduleRow({
+          id: "awaiting-run",
+          status: "triggered",
+          triggeredAt: new Date(Date.now() - 60_000),
+        }),
+      ]);
+      listRunsMock.mockRejectedValue(new Error("rate limited"));
+
+      const response = await GET(makeRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.triggered).toBe(1);
+      // Both the seeded schedule and the one dispatched this tick enter the
+      // locate step and hit the rejecting mock, so errors is exactly 2.
+      expect(body.resolution).toMatchObject({ errors: 2 });
+    });
+
+    it("resolves triggered schedules even when zero schedules are due", async () => {
+      const recentTrigger = new Date(Date.now() - 60_000);
+      // No pending due schedules, only a previously-triggered one awaiting resolution
+      fakeStore.schedule = createFakeScheduleStore([
+        makeScheduleRow({
+          id: "unresolved",
+          status: "triggered",
+          triggeredAt: recentTrigger,
+          workflowPath: ".github/workflows/test.yml",
+          workflowName: "Test",
+        }),
+      ]);
+      listRunsMock.mockResolvedValue({
+        success: true,
+        runs: [
+          {
+            id: 123,
+            htmlUrl: "https://github.com/o/r/actions/runs/123",
+            status: "completed",
+            conclusion: "success",
+            createdAt: new Date(recentTrigger.getTime() + 5_000).toISOString(),
+          },
+        ],
+      });
+
+      const response = await GET(makeRequest());
+      const body = await response.json();
+
+      // Resolution pass runs even though processed is 0
+      expect(response.status).toBe(200);
+      expect(body.processed).toBe(0);
+      expect(body.triggered).toBe(0);
+      expect(body.resolution).toMatchObject({ linked: 1, resolved: 1 });
+      const rows = new Map(fakeStore.schedule.rowsSnapshot().map((r) => [r.id, r]));
+      expect(rows.get("unresolved")!.runUrl).toBe("https://github.com/o/r/actions/runs/123");
+      expect(rows.get("unresolved")!.runConclusion).toBe("success");
+    });
   });
 });
