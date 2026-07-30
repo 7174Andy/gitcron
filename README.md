@@ -240,17 +240,34 @@ building locally never migrates the database you happen to be pointed at.
 
 ### Deploying schema changes
 
-`npm run build` runs `scripts/migrate-deploy.mjs` between `prisma generate` and
-`next build`. On a production Vercel build it runs `prisma migrate deploy`;
-everywhere else it prints why it is skipping.
+`.github/workflows/release.yml` is the only path to production. On a merge to
+`main` it runs `prisma migrate deploy`, and only if that succeeds does it
+trigger the Vercel deploy. A failed migration deploys nothing and Vercel keeps
+serving the previous release.
 
-Preview builds skip it deliberately: a preview pointed at the production
-database would apply an unmerged branch's migrations to production. If preview
-deployments get their own database, drop that gate so previews migrate too.
+Migrations used to run inside the Vercel build. Ordering was correct there —
+Vercel promotes only after a successful build — but a migration failure looked
+like a build failure, and every retried or concurrent build re-ran it.
+`concurrency: release` now runs one release at a time, so migrations cannot
+interleave.
 
-A production build with no `DATABASE_URL` fails rather than skipping. Skipping
-would restore the silence this script exists to remove, and failing is the safe
-direction — Vercel keeps serving the previous deployment.
+`vercel.json` disables Vercel's git trigger for `main`. That is load-bearing:
+without it Vercel would deploy off the same push in parallel with the release
+workflow, and new code could serve before its column exists — the outage in
+[#6](https://github.com/7174Andy/gitcron/issues/6), made intermittent. Preview
+deployments for other branches are unaffected.
+
+The workflow needs four repository secrets: `DATABASE_URL`, `VERCEL_TOKEN`,
+`VERCEL_ORG_ID`, and `VERCEL_PROJECT_ID`. Rotating the database credential
+means updating both Vercel and this secret — and recomputing
+`PROD_DB_USER_SHA256` in `lib/dev-db-guard.mjs`.
+
+To release without merging anything — retrying a failed deploy, say — run it by
+hand. `migrate deploy` is a no-op when nothing is pending:
+
+```bash
+gh workflow run release.yml
+```
 
 ## Development safeguards
 
