@@ -1,0 +1,56 @@
+# Daily check that production's actual schema still matches prisma/schema.prisma.
+#
+# Nothing used to compare the two, so divergence was invisible until a query
+# failed - Schedule.runUrl and Schedule.runConclusion were missing from
+# production for five days and were found only when a user reported schedule
+# creation broken. A failing scheduled run is the signal that was missing.
+#
+# `migrate diff --from-url` introspects and writes nothing, so this holds a
+# production credential but cannot alter production.
+name: Schema drift
+
+on:
+  schedule:
+    # 07:00 UTC daily. Any fixed time works; this is before the working day in
+    # US Pacific, so a report is waiting rather than arriving mid-change.
+    - cron: "0 7 * * *"
+  # So it can be run on demand - which is also the only way to verify it,
+  # since no development machine should hold the production credential.
+  workflow_dispatch:
+
+jobs:
+  drift:
+    name: Production matches schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Diff production against prisma/schema.prisma
+        id: drift
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          npx prisma migrate diff \
+            --from-url "$DATABASE_URL" \
+            --to-schema-datamodel prisma/schema.prisma \
+            --exit-code
+
+      - name: Explain the failure
+        if: failure() && steps.drift.outcome == 'failure'
+        run: |
+          echo "Production's schema does not match prisma/schema.prisma."
+          echo "The diff above is what production is missing or has extra."
+          echo
+          echo "A missing column means the deployed app is querying something"
+          echo "that does not exist. Check whether a release applied its"
+          echo "migrations:"
+          echo "    gh run list --workflow=release.yml --limit 5"
+          echo
+          echo "See issue #6."
