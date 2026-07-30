@@ -1,0 +1,71 @@
+# The only path to production.
+#
+# Migrations used to run inside the Vercel build (scripts/migrate-deploy.mjs).
+# Ordering was correct there - Vercel promotes only after a successful build -
+# but it was incidental: a migration failure looked like a build failure, and
+# every retried or concurrent build re-ran it, serialized only by Prisma's
+# advisory lock.
+#
+# Here the ordering is explicit. `migrate deploy` runs first, and because a
+# failed step ends the job, the deploy step simply never runs if it fails.
+# Vercel keeps serving the previous deployment, which is the safe direction.
+#
+# Requires vercel.json to disable Vercel's git trigger for main. Without it,
+# Vercel deploys off the same push in parallel with this workflow and the two
+# race - which is the failure mode in issue #6, reintroduced intermittently.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  # Lets the workflow be run by hand before anything depends on it.
+  # `migrate deploy` is a no-op when nothing is pending, so this is safe.
+  workflow_dispatch:
+
+# One release at a time. Two quick merges queue instead of overlapping, so
+# migrations cannot interleave. cancel-in-progress stays false: cancelling a
+# release mid-migration is worse than finishing it.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Step order is the whole point: schema first, code second. Additive
+      # changes must be present before the code that reads them ships.
+      - name: Apply pending migrations
+        id: migrate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npx prisma migrate deploy
+
+      - name: Explain a failed migration
+        if: failure() && steps.migrate.outcome == 'failure'
+        run: |
+          echo "Migrations failed, so nothing was deployed and production is"
+          echo "still serving the previous release. That is the safe outcome."
+          echo
+          echo "Fix the migration and merge again. Migrations are forward-only:"
+          echo "write a new migration rather than editing an applied one."
+
+      # Only reached when the migration succeeded. Vercel builds this commit
+      # with the build command from package.json, which no longer migrates.
+      - name: Deploy to Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: npx vercel@latest deploy --prod --yes --token="$VERCEL_TOKEN"
