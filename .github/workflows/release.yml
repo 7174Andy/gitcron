@@ -16,10 +16,17 @@
 name: Release
 
 on:
-  push:
+  # Chained off CI rather than `push` so a release cannot start until the
+  # migration gate, tests, and lint have passed on this commit. Branch
+  # protection on `main` is the primary enforcement; this is the half that
+  # lives in the repo, where it cannot be edited away in a settings page.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
-  # Lets the workflow be run by hand before anything depends on it.
-  # `migrate deploy` is a no-op when nothing is pending, so this is safe.
+  # Lets the workflow be run by hand — a first run before anything depends on
+  # it, or retrying a failed deploy. `migrate deploy` is a no-op when nothing
+  # is pending, so this is safe.
   workflow_dispatch:
 
 # One release at a time. Two quick merges queue instead of overlapping, so
@@ -33,16 +40,26 @@ jobs:
   release:
     runs-on: ubuntu-latest
     environment: production
-    # workflow_dispatch has no branch restriction of its own - run by hand
-    # against another branch, it would apply that branch's migrations to
-    # production and then deploy that checkout. Guarding the job to main
-    # keeps both manual uses (a dry run before anything depends on this
-    # workflow, retrying a stuck release) working, since both are done from
-    # main, while closing the same hole the deleted VERCEL_ENV gate used to.
-    if: github.ref == 'refs/heads/main'
+    # Under workflow_run, `github.ref` is always the default branch, so it
+    # cannot identify the triggering branch — that comes from head_branch.
+    # A dispatch has no workflow_run payload, so it is guarded separately: run
+    # by hand from another branch it would apply that branch's migrations to
+    # production and deploy that checkout.
+    if: >-
+      (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.head_branch == 'main')
+      || (github.event_name == 'workflow_dispatch'
+        && github.ref == 'refs/heads/main')
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Under workflow_run this defaults to the default branch's HEAD, not
+          # the commit CI just validated — which would migrate and deploy a
+          # different commit than the one that was tested. A dispatch has no
+          # workflow_run payload and falls back to github.sha.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: actions/setup-node@v4
         with:
