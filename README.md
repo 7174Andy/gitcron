@@ -162,13 +162,14 @@ schema, then:
 npm run db:migrate
 ```
 
-Commit the generated `prisma/migrations/` directory with the schema change. The
-production build applies it (see [Deploying schema
+Commit the generated `prisma/migrations/` directory with the schema change.
+`.github/workflows/release.yml` applies it to production before the new code
+ships; the build no longer applies anything (see [Deploying schema
 changes](#deploying-schema-changes)).
 
 > Do not use `npm run db:push` for a change you intend to commit. It alters the
-> database to match the schema without recording a migration, so the deployed
-> build has nothing to apply and production silently keeps the old columns —
+> database to match the schema without recording a migration, so the release has
+> nothing to apply and production silently keeps the old columns —
 > which is exactly how `Schedule.runUrl` and `Schedule.runConclusion` reached
 > production missing, breaking schedule creation and listing outright and
 > erroring the run-resolution pass on every cron tick.
@@ -197,6 +198,12 @@ breaks whichever version of the code is not yet deployed.
 New columns are therefore nullable or defaulted. A `NOT NULL` column with no
 default fails against a non-empty table, and one added mid-deploy rejects
 writes from the old code that does not set it.
+
+**Reverting** is not an escape hatch either. Never `git revert` a commit that
+added a migration: the revert deletes the migration and the schema line together,
+so the CI gate is satisfied and nothing complains — while the revert has quietly
+become a contract step against a column production still has, with no migration
+to drop it. Write the drop as a new migration in a later release instead.
 
 Nothing lints for this yet. Every migration so far is additive, so a
 destructive-change linter ([Squawk](https://squawkhq.com/) or
@@ -269,12 +276,39 @@ Tests live in `__tests__` directories beside the code they cover and mock
 network. A local `npm run build` runs `prisma generate`, which does not connect
 to anything.
 
+Three GitHub Actions workflows run outside your machine:
+
+- **`.github/workflows/ci.yml`** on every pull request and every push to `main`,
+  as three jobs: `test`, `lint`, and `Migrations match schema`. That last one
+  replays `prisma/migrations/` into a throwaway Postgres and diffs the result
+  against `prisma/schema.prisma` — red means the PR edits the schema without a
+  matching migration, and the fix is to run `npm run db:migrate` and commit what
+  it generates.
+- **`.github/workflows/release.yml`** once CI has passed on `main`, covered in
+  [Deploying schema changes](#deploying-schema-changes) below.
+- **`.github/workflows/schema-drift.yml`** daily at 07:00 UTC, diffing
+  production's real schema against `prisma/schema.prisma`. It is the alarm that
+  was missing in [#6](https://github.com/7174Andy/gitcron/issues/6), where
+  production ran without two columns for five days.
+
+Note that GitHub disables `schedule` triggers in a repository dormant for 60
+days. If the drift check goes quiet, confirm the schedule is still running rather
+than reading silence as no drift:
+
+```bash
+gh run list --workflow=schema-drift.yml
+```
+
 ### Deploying schema changes
 
-`.github/workflows/release.yml` is the only path to production. On a merge to
-`main` it runs `prisma migrate deploy`, and only if that succeeds does it
-trigger the Vercel deploy. A failed migration deploys nothing and Vercel keeps
-serving the previous release.
+`.github/workflows/release.yml` is the only path to production that applies
+migrations, and once `vercel.json` lands (below) the only path to production that
+git can trigger. It starts when CI completes successfully on `main` — chained
+off CI's completion rather than off the merge push, so a release cannot begin
+until the migration gate, tests, and lint are green on that exact commit, which
+it then checks out by SHA. It runs `prisma migrate deploy` first, and only if that
+succeeds does it deploy to Vercel. A failed migration deploys nothing and Vercel
+keeps serving the previous release.
 
 Migrations used to run inside the Vercel build. Ordering was correct there —
 Vercel promotes only after a successful build — but a migration failure looked
@@ -282,23 +316,79 @@ like a build failure, and every retried or concurrent build re-ran it.
 `concurrency: release` now runs one release at a time, so migrations cannot
 interleave.
 
-`vercel.json` disables Vercel's git trigger for `main`. That is load-bearing:
-without it Vercel would deploy off the same push in parallel with the release
-workflow, and new code could serve before its column exists — the outage in
-[#6](https://github.com/7174Andy/gitcron/issues/6), made intermittent. Preview
-deployments for other branches are unaffected.
+**`vercel.json` is not in the repo yet.** When it lands it will disable Vercel's
+git trigger for `main`, which is what stops Vercel deploying off the same push in
+parallel with this workflow. Until then a merge to `main` produces *both* a
+Vercel git deploy and this workflow's deploy, and the two race — harmless for a
+release with nothing pending, a real race for any release that has a migration.
+That is deliberate and temporary: whether `vercel deploy --prod` still works with
+the git trigger disabled takes one real production deploy to find out, and
+holding `vercel.json` back leaves the git deploy as a fallback if it does not, so
+a broken deploy step cannot strand the project with no way to ship at all. It
+follows in a one-file pull request as soon as the first release has proven the
+CLI path, and no schema-changing merge should happen before it is in. Preview
+deployments for other branches are unaffected either way.
 
-The workflow needs four repository secrets: `DATABASE_URL`, `VERCEL_TOKEN`,
-`VERCEL_ORG_ID`, and `VERCEL_PROJECT_ID`. Rotating the database credential
-means updating both Vercel and this secret — and recomputing
-`PROD_DB_USER_SHA256` in `lib/dev-db-guard.mjs`.
+Even with `vercel.json` in place, only *git-triggered* deploys are disabled. Each
+of these still ships code whose migrations were never applied, and the daily
+drift check cannot detect it — that check compares production's database to
+`main`'s schema, not to whatever code is deployed. So don't:
+
+- **Promote to Production** on a preview deployment, in the dashboard or with
+  `vercel promote`
+- add a **Deploy Hook** for `main`
+- use **Instant Rollback**
+- run `vercel --prod` from a laptop
+
+Don't re-run an old release run either. `gh run rerun <id>` checks out that run's
+commit, `migrate deploy` finds nothing pending and succeeds, and the deploy makes
+that old commit production — a silent rollback the branch guard cannot catch,
+since the branch was `main` both times. Release the fix forward instead.
+
+The workflow reads four secrets — `DATABASE_URL`, `VERCEL_TOKEN`,
+`VERCEL_ORG_ID`, and `VERCEL_PROJECT_ID` — from the `production` GitHub
+environment, with deployment branches restricted to `main`. That restriction is
+what scopes them: as plain repository secrets, a `workflow_dispatch` of any
+workflow on any branch could read them. `schema-drift.yml` reads `DATABASE_URL`
+from the same environment, which is why it declares `environment: production`
+despite only reading. Rotating the database credential means updating Vercel, the
+environment secret, and `PROD_DB_USER_SHA256` in `lib/dev-db-guard.mjs`.
 
 To release without merging anything — retrying a failed deploy, say — run it by
-hand. `migrate deploy` is a no-op when nothing is pending:
+hand from `main`. `migrate deploy` is a no-op when nothing is pending:
 
 ```bash
 gh workflow run release.yml
 ```
+
+#### When a migration fails
+
+Fixing the migration and merging again is not enough on its own. A migration
+that failed part-way is recorded in `_prisma_migrations` with `finished_at` NULL,
+and **every later `prisma migrate deploy` aborts with `P3009`** until that record
+is resolved — including releases that touch no schema at all. Because
+`release.yml` is now the only deploy path git can trigger, one bad migration
+freezes every deploy until it is cleared. A release cancelled or timed out
+mid-migration leaves the same state.
+
+So look at the database, decide whether the failed migration's DDL actually
+landed, and tell Prisma which of the two happened:
+
+```bash
+prisma migrate resolve --rolled-back <migration_name>   # the DDL did not land
+prisma migrate resolve --applied     <migration_name>   # the DDL did land
+```
+
+`--rolled-back` puts the migration back in the pending set, so it is only correct
+if the database really is unchanged — marking a partly-applied migration
+`--rolled-back` just fails again on the statement that already succeeded.
+`--applied` accepts its DDL as done, so whatever it did *not* finish has to be
+written as a new migration. Either way, the next step is a forward migration and
+another merge: migrations are forward-only, and an applied migration is never
+edited.
+
+On a first release, an empty or wrong `DATABASE_URL` secret fails at the same
+step, and is likelier than a bad migration.
 
 ## Development safeguards
 
@@ -392,12 +482,27 @@ change the host side of the port mapping in `docker/docker-compose.yml`.
    - `CRON_SECRET`
    - `ENCRYPTION_KEY`
 4. Deploy
+5. Add the secrets `release.yml` needs, under **Settings → Environments** on the
+   GitHub repository, in an environment named `production` with deployment
+   branches restricted to `main`:
+   - `DATABASE_URL` — the production database, same value as in Vercel
+   - `VERCEL_TOKEN` — an account token from Vercel
+   - `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` — from the Vercel project settings
+
+Step 4 is the last deploy you trigger from the Vercel side. After that a release
+is `.github/workflows/release.yml`: merge to `main`, CI passes, and the workflow
+applies migrations and then deploys — or `gh workflow run release.yml` to release
+by hand. Watch that workflow rather than the Vercel dashboard, because it is the
+thing that applies migrations. Vercel does still deploy `main` off its own git
+trigger for now, and will stop once `vercel.json` lands; see [Deploying schema
+changes](#deploying-schema-changes) for why it is not in the repo yet and what
+races until it is.
 
 `DATABASE_URL` is needed by the running app, not by the Vercel build — `next
-build` never touches the database. It is also needed separately as a GitHub
-Actions repository secret, because that is what `release.yml` uses to run
-`prisma migrate deploy` before each release. See
-[Deploying schema changes](#deploying-schema-changes).
+build` never touches the database. It is needed separately by GitHub Actions, in
+the `production` environment above, because that is what `release.yml` uses to
+run `prisma migrate deploy` before each release, and what `schema-drift.yml` uses
+to check production daily.
 
 ### Create a production GitHub OAuth App
 

@@ -1,4 +1,5 @@
-# The only path to production that git can trigger.
+# The only path to production that applies migrations - and once vercel.json
+# lands (see below), the only one git can trigger at all.
 #
 # Migrations used to run inside the Vercel build, in a script deleted with this
 # change. Ordering was correct there - Vercel promotes only after a successful
