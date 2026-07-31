@@ -1,18 +1,23 @@
-# The only path to production.
+# The only path to production that git can trigger.
 #
-# Migrations used to run inside the Vercel build (scripts/migrate-deploy.mjs).
-# Ordering was correct there - Vercel promotes only after a successful build -
-# but it was incidental: a migration failure looked like a build failure, and
-# every retried or concurrent build re-ran it, serialized only by Prisma's
-# advisory lock.
+# Migrations used to run inside the Vercel build, in a script deleted with this
+# change. Ordering was correct there - Vercel promotes only after a successful
+# build - but it was incidental: a migration failure looked like a build
+# failure, and every retried or concurrent build re-ran it, serialized only by
+# Prisma's advisory lock.
 #
 # Here the ordering is explicit. `migrate deploy` runs first, and because a
 # failed step ends the job, the deploy step simply never runs if it fails.
 # Vercel keeps serving the previous deployment, which is the safe direction.
 #
-# Requires vercel.json to disable Vercel's git trigger for main. Without it,
-# Vercel deploys off the same push in parallel with this workflow and the two
-# race - which is the failure mode in issue #6, reintroduced intermittently.
+# A vercel.json disabling Vercel's git trigger for main is NOT in the repo yet.
+# Until it is, Vercel also deploys main off the same push, in parallel with this
+# workflow, and the two race - the failure mode in issue #6, made intermittent.
+# That is deliberate and temporary: it leaves the git-triggered deploy as a
+# fallback while `vercel deploy --prod` from this workflow is still unproven, so
+# a first release that cannot deploy does not strand the project with no way to
+# ship. It must be added promptly, and no schema-changing merge should happen
+# before it is.
 name: Release
 
 on:
