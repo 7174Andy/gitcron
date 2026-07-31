@@ -299,6 +299,13 @@ than reading silence as no drift:
 gh run list --workflow=schema-drift.yml
 ```
 
+A red drift check sometimes just means a release is still pending: `ci.yml`
+cancels superseded runs, and a cancelled CI run starts no release, so `main`'s
+migrations wait for the next push. Production really is behind `main` in that
+window, so the alarm is right — but the fix is a release, not a drift hunt, which
+is why the workflow's failure output points at `gh run list
+--workflow=release.yml`.
+
 ### Deploying schema changes
 
 `.github/workflows/release.yml` is the only path to production that applies
@@ -340,10 +347,13 @@ drift check cannot detect it — that check compares production's database to
 - use **Instant Rollback**
 - run `vercel --prod` from a laptop
 
-Don't re-run an old release run either. `gh run rerun <id>` checks out that run's
-commit, `migrate deploy` finds nothing pending and succeeds, and the deploy makes
-that old commit production — a silent rollback the branch guard cannot catch,
-since the branch was `main` both times. Release the fix forward instead.
+Don't re-run an old run, of either workflow. `gh run rerun <id>` on an old
+release run checks out that run's commit, `migrate deploy` finds nothing pending
+and succeeds, and the deploy makes that old commit production — a silent rollback
+the branch guard cannot catch, since the branch was `main` both times. Re-running
+an old *CI* run does the same thing at one remove: its completion is a fresh
+`workflow_run` success for that old commit, which starts a release of it. Release
+the fix forward instead.
 
 The workflow reads four secrets — `DATABASE_URL`, `VERCEL_TOKEN`,
 `VERCEL_ORG_ID`, and `VERCEL_PROJECT_ID` — from the `production` GitHub
@@ -366,10 +376,13 @@ gh workflow run release.yml
 Fixing the migration and merging again is not enough on its own. A migration
 that failed part-way is recorded in `_prisma_migrations` with `finished_at` NULL,
 and **every later `prisma migrate deploy` aborts with `P3009`** until that record
-is resolved — including releases that touch no schema at all. Because
-`release.yml` is now the only deploy path git can trigger, one bad migration
-freezes every deploy until it is cleared. A release cancelled or timed out
-mid-migration leaves the same state.
+is resolved — including releases that touch no schema at all. Once `vercel.json`
+lands and this is the only deploy path git can trigger, one bad migration freezes
+every deploy until it is cleared. Until then it is the worse way round: the
+migration stalls here while Vercel keeps deploying `main` off the same push, so
+code ships without its migrations — issue #6 exactly. Either way, clear the
+`P3009` before the next merge. A release cancelled or timed out mid-migration
+leaves the same state.
 
 So look at the database, decide whether the failed migration's DDL actually
 landed, and tell Prisma which of the two happened:

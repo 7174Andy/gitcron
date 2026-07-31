@@ -5,6 +5,14 @@
 # prisma/schema.prisma. A PR that edits the schema without generating a
 # migration fails here instead of deploying a Prisma Client whose queries
 # reference columns production does not have.
+#
+# This name is load-bearing twice over. release.yml matches this workflow by it
+# (`workflow_run: workflows: [CI]`), so renaming it silently stops every release
+# with no error anywhere. And branch protection on main requires three check
+# names from here: `Migrations match schema`, `test`, and `lint`. The last two are
+# job ids, not names, because those jobs declare no `name:` - so renaming a job,
+# or adding a `name:` to either one later, silently un-matches the protection rule
+# and removes the gate.
 name: CI
 
 on:
