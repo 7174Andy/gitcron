@@ -70,11 +70,16 @@ jobs:
 
       # Only reached when the migration succeeded. Vercel builds this commit
       # with the build command from package.json, which no longer migrates.
-      # `npx vercel` (not `vercel@latest`) resolves the version npm ci just
-      # installed from package-lock.json, the same pinning Prisma already gets.
+      # The major version is pinned so a breaking Vercel CLI release can't
+      # break every release with no repo change to point at. It's pinned
+      # here rather than as a package.json devDependency because this is the
+      # only workflow that uses the CLI, and a devDependency would install
+      # its ~447 packages in ci.yml and schema-drift.yml too, on every run,
+      # for a tool neither ever invokes. Bumping the major is a deliberate
+      # one-line edit.
       - name: Deploy to Vercel
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: npx vercel deploy --prod --yes --token="$VERCEL_TOKEN"
+        run: npx vercel@58 deploy --prod --yes --token="$VERCEL_TOKEN"
