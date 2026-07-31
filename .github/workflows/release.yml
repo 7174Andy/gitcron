@@ -33,6 +33,13 @@ jobs:
   release:
     runs-on: ubuntu-latest
     environment: production
+    # workflow_dispatch has no branch restriction of its own - run by hand
+    # against another branch, it would apply that branch's migrations to
+    # production and then deploy that checkout. Guarding the job to main
+    # keeps both manual uses (a dry run before anything depends on this
+    # workflow, retrying a stuck release) working, since both are done from
+    # main, while closing the same hole the deleted VERCEL_ENV gate used to.
+    if: github.ref == 'refs/heads/main'
 
     steps:
       - uses: actions/checkout@v4
@@ -63,9 +70,11 @@ jobs:
 
       # Only reached when the migration succeeded. Vercel builds this commit
       # with the build command from package.json, which no longer migrates.
+      # `npx vercel` (not `vercel@latest`) resolves the version npm ci just
+      # installed from package-lock.json, the same pinning Prisma already gets.
       - name: Deploy to Vercel
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: npx vercel@latest deploy --prod --yes --token="$VERCEL_TOKEN"
+        run: npx vercel deploy --prod --yes --token="$VERCEL_TOKEN"

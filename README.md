@@ -235,8 +235,7 @@ npm run build     # Production build
 Tests live in `__tests__` directories beside the code they cover and mock
 `@/lib/db`, `@/auth`, and `@/lib/crypto`, so none of them need a database or
 network. A local `npm run build` runs `prisma generate`, which does not connect
-to anything, and skips the migration step — that step requires `VERCEL_ENV`, so
-building locally never migrates the database you happen to be pointed at.
+to anything.
 
 ### Deploying schema changes
 
@@ -362,8 +361,10 @@ change the host side of the port mapping in `docker/docker-compose.yml`.
    - `ENCRYPTION_KEY`
 4. Deploy
 
-`DATABASE_URL` must be exposed to the **Build** step, not only the runtime — the
-production build runs `prisma migrate deploy` and fails without it. See
+`DATABASE_URL` is needed by the running app, not by the Vercel build — `next
+build` never touches the database. It is also needed separately as a GitHub
+Actions repository secret, because that is what `release.yml` uses to run
+`prisma migrate deploy` before each release. See
 [Deploying schema changes](#deploying-schema-changes).
 
 ### Create a production GitHub OAuth App
