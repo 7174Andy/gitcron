@@ -12,6 +12,16 @@ on:
   push:
     branches: [main]
 
+# Every job here only reads the checkout.
+permissions:
+  contents: read
+
+# Successive pushes to a PR otherwise leave superseded runs burning minutes,
+# including a Postgres service container each. Only the newest push matters.
+concurrency:
+  group: "ci-${{ github.ref }}"
+  cancel-in-progress: true
+
 jobs:
   migrations:
     name: Migrations match schema

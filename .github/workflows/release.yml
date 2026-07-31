@@ -34,6 +34,13 @@ on:
   # is pending, so this is safe.
   workflow_dispatch:
 
+# This job needs no GITHUB_TOKEN scope at all, and it is the worst place to have
+# one: it pairs the production database credential and a Vercel token with `npx
+# vercel@58`, whose ~447 packages are fetched from npm and run at release time.
+# If the repository default is read/write, that tree runs beside a token that
+# can push to main.
+permissions: {}
+
 # One release at a time. Two quick merges queue instead of overlapping, so
 # migrations cannot interleave. cancel-in-progress stays false: cancelling a
 # release mid-migration is worse than finishing it.
@@ -43,8 +50,16 @@ concurrency:
 
 jobs:
   release:
+    # Named because a required-status-check rule matches on the job name.
+    # Renaming it later silently un-matches the rule and disables the gate with
+    # no error anywhere.
+    name: Migrate then deploy
     runs-on: ubuntu-latest
     environment: production
+    # `migrate deploy` blocked on Prisma's advisory lock would otherwise hold
+    # the `release` concurrency group for the 6-hour default - and since
+    # cancel-in-progress is false, freeze every deploy queued behind it.
+    timeout-minutes: 15
     # Under workflow_run, `github.ref` is always the default branch, so it
     # cannot identify the triggering branch — that comes from head_branch.
     # A dispatch has no workflow_run payload, so it is guarded separately: run
@@ -87,8 +102,24 @@ jobs:
           echo "Migrations failed, so nothing was deployed and production is"
           echo "still serving the previous release. That is the safe outcome."
           echo
-          echo "Fix the migration and merge again. Migrations are forward-only:"
-          echo "write a new migration rather than editing an applied one."
+          echo "An empty or wrong DATABASE_URL secret fails here too - on a"
+          echo "first release that is likelier than a bad migration."
+          echo
+          echo "A migration that failed part-way is recorded in"
+          echo "_prisma_migrations with finished_at NULL, and every later"
+          echo "'migrate deploy' aborts with P3009 until that is resolved -"
+          echo "including releases that touch no schema at all. Since this"
+          echo "workflow is now the only deploy path git can trigger, one bad"
+          echo "migration freezes all deploys. A cancelled or timed-out run"
+          echo "mid-migration leaves the same state."
+          echo
+          echo "So check whether the DDL actually landed in the database, then"
+          echo "tell Prisma which of the two happened:"
+          echo "    prisma migrate resolve --rolled-back <migration_name>   # the DDL did not land"
+          echo "    prisma migrate resolve --applied     <migration_name>   # the DDL did land"
+          echo
+          echo "Then write a forward migration and merge again. Migrations are"
+          echo "forward-only: an applied migration is never edited."
 
       # Only reached when the migration succeeded. Vercel builds this commit
       # with the build command from package.json, which no longer migrates.
@@ -99,9 +130,12 @@ jobs:
       # its ~447 packages in ci.yml and schema-drift.yml too, on every run,
       # for a tool neither ever invokes. Bumping the major is a deliberate
       # one-line edit.
+      #
+      # No --token flag: the CLI reads VERCEL_TOKEN from the environment, which
+      # also keeps the token out of the runner's process arguments.
       - name: Deploy to Vercel
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: npx vercel@58 deploy --prod --yes --token="$VERCEL_TOKEN"
+        run: npx vercel@58 deploy --prod --yes

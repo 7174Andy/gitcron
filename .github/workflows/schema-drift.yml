@@ -18,10 +18,21 @@ on:
   # since no development machine should hold the production credential.
   workflow_dispatch:
 
+# Reads the checkout and the database; touches nothing on GitHub.
+permissions:
+  contents: read
+
 jobs:
   drift:
     name: Production matches schema
     runs-on: ubuntu-latest
+    # Declared on a workflow that only reads because DATABASE_URL lives in the
+    # `production` environment, which is what scopes it to main - as a plain
+    # repository secret it is readable by a workflow_dispatch of any workflow on
+    # any branch. Without this line, `secrets.DATABASE_URL` below resolves to an
+    # empty string, `migrate diff --from-url ""` errors, and this check goes red
+    # every day for the wrong reason: alarm fatigue on the only alarm there is.
+    environment: production
     steps:
       - uses: actions/checkout@v4
 
