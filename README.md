@@ -173,6 +173,38 @@ changes](#deploying-schema-changes)).
 > production missing, breaking schedule creation and listing outright and
 > erroring the run-resolution pass on every cron tick.
 
+#### Expand and contract
+
+Both old and new code run at the same instant during a deploy, and a code
+rollback never rolls back a schema. So the schema must work with *both*
+versions at every point, and migrations are forward-only.
+
+That splits every change into two directions:
+
+**Adding** — migrate first, ship the code that uses it second. Old code
+ignores a column it does not know about, so an additive migration is safe to
+apply before its code. The release workflow already enforces this order.
+
+**Removing** — the reverse, across two releases. Ship code that stops reading
+the column first; drop it in a later release. Dropping a column the running
+code still selects breaks production the moment the migration lands.
+
+**Renaming** is never a rename. It is: add the new column, backfill it, stop
+reading the old one, then drop it — four steps across at least two releases. A
+single `@map` rename in `schema.prisma` generates a destructive migration that
+breaks whichever version of the code is not yet deployed.
+
+New columns are therefore nullable or defaulted. A `NOT NULL` column with no
+default fails against a non-empty table, and one added mid-deploy rejects
+writes from the old code that does not set it.
+
+Nothing lints for this yet. Every migration so far is additive, so a
+destructive-change linter ([Squawk](https://squawkhq.com/) or
+[Atlas](https://atlasgo.io/)) is deliberately deferred until the first
+non-additive change — see
+[#6](https://github.com/7174Andy/gitcron/issues/6). Add it then, before the
+change that needs it.
+
 ### 6. Run the development server
 
 ```bash
