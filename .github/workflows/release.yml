@@ -98,7 +98,7 @@ jobs:
         && github.ref == 'refs/heads/main')
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # Under workflow_run this defaults to the default branch's HEAD, not
           # the commit CI just validated — which would migrate and deploy a
@@ -106,7 +106,7 @@ jobs:
           # workflow_run payload and falls back to github.sha.
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
