@@ -61,14 +61,38 @@ jobs:
     # the `release` concurrency group for the 6-hour default - and since
     # cancel-in-progress is false, freeze every deploy queued behind it.
     timeout-minutes: 15
-    # Under workflow_run, `github.ref` is always the default branch, so it
-    # cannot identify the triggering branch — that comes from head_branch.
-    # A dispatch has no workflow_run payload, so it is guarded separately: run
-    # by hand from another branch it would apply that branch's migrations to
+    # Every condition here is load-bearing. Do not simplify this guard.
+    #
+    # This repository is public and ci.yml runs on `pull_request` with no branch
+    # filter, so a pull request from a fork runs CI *here* - and its completion
+    # fires this workflow_run, which unlike the PR run itself has full access to
+    # the secrets below. A fork's default branch is also called `main`, so
+    # neither `branches: [main]` on the trigger (which filters the triggering
+    # run's head branch, not its base) nor `head_branch == 'main'` excludes it.
+    # Unguarded, an outside contributor's commit would be checked out by
+    # head_sha and this job would run their package.json through `npm ci`, their
+    # prisma/migrations/ against the production database, and `vercel deploy
+    # --prod` with the production token.
+    #
+    # `workflow_run.event == 'push'` is what closes that: a fork PR's triggering
+    # run carries `pull_request`. `head_repository.full_name == github.repository`
+    # is the second lock - the commit must have come from this repository, not a
+    # fork of it.
+    #
+    # `environment: production` cannot substitute for either. Its deployment
+    # branch policy is evaluated against `github.ref`, which under workflow_run
+    # is always the default branch, so the policy always passes. That is the same
+    # reason branch identity has to come from `head_branch` rather than
+    # `github.ref` here.
+    #
+    # A dispatch carries no workflow_run payload, so it is guarded separately:
+    # run by hand from another branch it would apply that branch's migrations to
     # production and deploy that checkout.
     if: >-
       (github.event_name == 'workflow_run'
         && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.head_repository.full_name == github.repository
         && github.event.workflow_run.head_branch == 'main')
       || (github.event_name == 'workflow_dispatch'
         && github.ref == 'refs/heads/main')
