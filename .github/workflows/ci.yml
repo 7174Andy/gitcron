@@ -1,0 +1,112 @@
+# Per-PR checks. Three independent jobs so one failure does not mask another.
+#
+# The migrations job is the gate that issue #6 is about: it replays
+# prisma/migrations/ into a throwaway Postgres and diffs the result against
+# prisma/schema.prisma. A PR that edits the schema without generating a
+# migration fails here instead of deploying a Prisma Client whose queries
+# reference columns production does not have.
+#
+# This name is load-bearing twice over. release.yml matches this workflow by it
+# (`workflow_run: workflows: [CI]`), so renaming it silently stops every release
+# with no error anywhere. And branch protection on main requires three check
+# names from here: `Migrations match schema`, `test`, and `lint`. The last two are
+# job ids, not names, because those jobs declare no `name:` - so renaming a job,
+# or adding a `name:` to either one later, silently un-matches the protection rule
+# and removes the gate.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Every job here only reads the checkout.
+permissions:
+  contents: read
+
+# Successive pushes to a PR otherwise leave superseded runs burning minutes,
+# including a Postgres service container each. Only the newest push matters.
+concurrency:
+  group: "ci-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  migrations:
+    name: Migrations match schema
+    runs-on: ubuntu-latest
+
+    # `migrate diff --from-migrations` replays every migration, so it needs a
+    # real database to replay them into. A service container is thrown away
+    # with the job, which is what makes it safe to hand Prisma as a shadow.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: shadow
+          POSTGRES_DB: shadow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d shadow"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      # Installs the repo's pinned Prisma 5.22. `npx prisma` below must resolve
+      # to that, not to prisma@latest, or the diff runs on a different engine
+      # than the app.
+      - run: npm ci
+
+      - name: prisma/migrations must reproduce prisma/schema.prisma
+        id: diff
+        run: |
+          npx prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema-datamodel prisma/schema.prisma \
+            --shadow-database-url postgresql://postgres:shadow@localhost:5432/shadow \
+            --exit-code
+
+      - name: Explain the failure
+        if: failure() && steps.diff.outcome == 'failure'
+        run: |
+          echo "prisma/schema.prisma and prisma/migrations/ disagree."
+          echo "The diff above is what production would be missing."
+          echo
+          echo "Generate the migration and commit it alongside the schema change:"
+          echo "    npm run db:migrate"
+          echo
+          echo "Do not use 'npm run db:push' for a committed change - it alters"
+          echo "the database without recording a migration, which is how"
+          echo "Schedule.runUrl and Schedule.runConclusion reached production"
+          echo "missing. See issue #6."
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint

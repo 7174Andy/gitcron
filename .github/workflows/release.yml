@@ -1,0 +1,169 @@
+# The only path to production that applies migrations - and once vercel.json
+# lands (see below), the only one git can trigger at all.
+#
+# Migrations used to run inside the Vercel build, in a script deleted with this
+# change. Ordering was correct there - Vercel promotes only after a successful
+# build - but it was incidental: a migration failure looked like a build
+# failure, and every retried or concurrent build re-ran it, serialized only by
+# Prisma's advisory lock.
+#
+# Here the ordering is explicit. `migrate deploy` runs first, and because a
+# failed step ends the job, the deploy step simply never runs if it fails.
+# Vercel keeps serving the previous deployment, which is the safe direction.
+#
+# A vercel.json disabling Vercel's git trigger for main is NOT in the repo yet.
+# Until it is, Vercel also deploys main off the same push, in parallel with this
+# workflow, and the two race - the failure mode in issue #6, made intermittent.
+# That is deliberate and temporary: it leaves the git-triggered deploy as a
+# fallback while `vercel deploy --prod` from this workflow is still unproven, so
+# a first release that cannot deploy does not strand the project with no way to
+# ship. It must be added promptly, and no schema-changing merge should happen
+# before it is.
+name: Release
+
+on:
+  # Chained off CI rather than `push` so a release cannot start until the
+  # migration gate, tests, and lint have passed on this commit. Branch
+  # protection on `main` is the primary enforcement; this is the half that
+  # lives in the repo, where it cannot be edited away in a settings page.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # Lets the workflow be run by hand — a first run before anything depends on
+  # it, or retrying a failed deploy. `migrate deploy` is a no-op when nothing
+  # is pending, so this is safe.
+  workflow_dispatch:
+
+# This job needs no GITHUB_TOKEN scope at all, and it is the worst place to have
+# one: it pairs the production database credential and a Vercel token with `npx
+# vercel@58`, whose ~447 packages are fetched from npm and run at release time.
+# If the repository default is read/write, that tree runs beside a token that
+# can push to main.
+permissions: {}
+
+# One release at a time. Two quick merges queue instead of overlapping, so
+# migrations cannot interleave. cancel-in-progress stays false: cancelling a
+# release mid-migration is worse than finishing it.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Named because a required-status-check rule matches on the job name.
+    # Renaming it later silently un-matches the rule and disables the gate with
+    # no error anywhere.
+    name: Migrate then deploy
+    runs-on: ubuntu-latest
+    environment: production
+    # `migrate deploy` blocked on Prisma's advisory lock would otherwise hold
+    # the `release` concurrency group for the 6-hour default - and since
+    # cancel-in-progress is false, freeze every deploy queued behind it.
+    timeout-minutes: 15
+    # Every condition here is load-bearing. Do not simplify this guard.
+    #
+    # This repository is public and ci.yml runs on `pull_request` with no branch
+    # filter, so a pull request from a fork runs CI *here* - and its completion
+    # fires this workflow_run, which unlike the PR run itself has full access to
+    # the secrets below. A fork's default branch is also called `main`, so
+    # neither `branches: [main]` on the trigger (which filters the triggering
+    # run's head branch, not its base) nor `head_branch == 'main'` excludes it.
+    # Unguarded, an outside contributor's commit would be checked out by
+    # head_sha and this job would run their package.json through `npm ci`, their
+    # prisma/migrations/ against the production database, and `vercel deploy
+    # --prod` with the production token.
+    #
+    # `workflow_run.event == 'push'` is what closes that: a fork PR's triggering
+    # run carries `pull_request`. `head_repository.full_name == github.repository`
+    # is the second lock - the commit must have come from this repository, not a
+    # fork of it.
+    #
+    # `environment: production` cannot substitute for either. Its deployment
+    # branch policy is evaluated against `github.ref`, which under workflow_run
+    # is always the default branch, so the policy always passes. That is the same
+    # reason branch identity has to come from `head_branch` rather than
+    # `github.ref` here.
+    #
+    # A dispatch carries no workflow_run payload, so it is guarded separately:
+    # run by hand from another branch it would apply that branch's migrations to
+    # production and deploy that checkout.
+    if: >-
+      (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.head_repository.full_name == github.repository
+        && github.event.workflow_run.head_branch == 'main')
+      || (github.event_name == 'workflow_dispatch'
+        && github.ref == 'refs/heads/main')
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Under workflow_run this defaults to the default branch's HEAD, not
+          # the commit CI just validated — which would migrate and deploy a
+          # different commit than the one that was tested. A dispatch has no
+          # workflow_run payload and falls back to github.sha.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Step order is the whole point: schema first, code second. Additive
+      # changes must be present before the code that reads them ships.
+      - name: Apply pending migrations
+        id: migrate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npx prisma migrate deploy
+
+      - name: Explain a failed migration
+        if: failure() && steps.migrate.outcome == 'failure'
+        run: |
+          echo "Migrations failed, so nothing was deployed and production is"
+          echo "still serving the previous release. That is the safe outcome."
+          echo
+          echo "An empty or wrong DATABASE_URL secret fails here too - on a"
+          echo "first release that is likelier than a bad migration."
+          echo
+          echo "A migration that failed part-way is recorded in"
+          echo "_prisma_migrations with finished_at NULL, and every later"
+          echo "'migrate deploy' aborts with P3009 until that is resolved -"
+          echo "including releases that touch no schema at all. Once"
+          echo "vercel.json lands and this is the only deploy path git can"
+          echo "trigger, one bad migration freezes every deploy. Until then it"
+          echo "is the worse way round: migrations stall here while Vercel keeps"
+          echo "deploying main off the same push, so code ships without them -"
+          echo "issue #6 exactly. Either way, clear this before the next merge."
+          echo "A cancelled or timed-out run mid-migration leaves the same state."
+          echo
+          echo "So check whether the DDL actually landed in the database, then"
+          echo "tell Prisma which of the two happened:"
+          echo "    prisma migrate resolve --rolled-back <migration_name>   # the DDL did not land"
+          echo "    prisma migrate resolve --applied     <migration_name>   # the DDL did land"
+          echo
+          echo "Then write a forward migration and merge again. Migrations are"
+          echo "forward-only: an applied migration is never edited."
+
+      # Only reached when the migration succeeded. Vercel builds this commit
+      # with the build command from package.json, which no longer migrates.
+      # The major version is pinned so a breaking Vercel CLI release can't
+      # break every release with no repo change to point at. It's pinned
+      # here rather than as a package.json devDependency because this is the
+      # only workflow that uses the CLI, and a devDependency would install
+      # its ~447 packages in ci.yml and schema-drift.yml too, on every run,
+      # for a tool neither ever invokes. Bumping the major is a deliberate
+      # one-line edit.
+      #
+      # No --token flag: the CLI reads VERCEL_TOKEN from the environment, which
+      # also keeps the token out of the runner's process arguments.
+      - name: Deploy to Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: npx vercel@58 deploy --prod --yes
