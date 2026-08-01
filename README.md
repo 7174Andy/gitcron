@@ -309,8 +309,8 @@ is why the workflow's failure output points at `gh run list
 ### Deploying schema changes
 
 `.github/workflows/release.yml` is the only path to production that applies
-migrations, and once `vercel.json` lands (below) the only path to production that
-git can trigger. It starts when CI completes successfully on `main` — chained
+migrations, and the only path to production that git can trigger. It starts when
+CI completes successfully on `main` — chained
 off CI's completion rather than off the merge push, so a release cannot begin
 until the migration gate, tests, and lint are green on that exact commit, which
 it then checks out by SHA. It runs `prisma migrate deploy` first, and only if that
@@ -323,20 +323,18 @@ like a build failure, and every retried or concurrent build re-ran it.
 `concurrency: release` now runs one release at a time, so migrations cannot
 interleave.
 
-**`vercel.json` is not in the repo yet.** When it lands it will disable Vercel's
-git trigger for `main`, which is what stops Vercel deploying off the same push in
-parallel with this workflow. Until then a merge to `main` produces *both* a
-Vercel git deploy and this workflow's deploy, and the two race — harmless for a
-release with nothing pending, a real race for any release that has a migration.
-That is deliberate and temporary: whether `vercel deploy --prod` still works with
-the git trigger disabled takes one real production deploy to find out, and
-holding `vercel.json` back leaves the git deploy as a fallback if it does not, so
-a broken deploy step cannot strand the project with no way to ship at all. It
-follows in a one-file pull request as soon as the first release has proven the
-CLI path, and no schema-changing merge should happen before it is in. Preview
-deployments for other branches are unaffected either way.
+**`vercel.json` is load-bearing.** It disables Vercel's git trigger for `main`,
+which is what stops Vercel deploying off the same push in parallel with this
+workflow. Without it, a merge produces *both* a Vercel git deploy and this
+workflow's deploy with nothing ordering them — harmless for a release with
+nothing pending, a real race for any release carrying a migration, which is
+issue #6 made intermittent. Deleting the file silently reopens that race and no
+check would catch it. Preview deployments for other branches are unaffected.
 
-Even with `vercel.json` in place, only *git-triggered* deploys are disabled. Each
+The cost of that is no git-triggered fallback: if the deploy step breaks, there
+is no other way to ship until it is fixed or `vercel.json` is reverted.
+
+`vercel.json` covers only *git-triggered* deploys. Each
 of these still ships code whose migrations were never applied, and the daily
 drift check cannot detect it — that check compares production's database to
 `main`'s schema, not to whatever code is deployed. So don't:
@@ -376,13 +374,10 @@ gh workflow run release.yml
 Fixing the migration and merging again is not enough on its own. A migration
 that failed part-way is recorded in `_prisma_migrations` with `finished_at` NULL,
 and **every later `prisma migrate deploy` aborts with `P3009`** until that record
-is resolved — including releases that touch no schema at all. Once `vercel.json`
-lands and this is the only deploy path git can trigger, one bad migration freezes
-every deploy until it is cleared. Until then it is the worse way round: the
-migration stalls here while Vercel keeps deploying `main` off the same push, so
-code ships without its migrations — issue #6 exactly. Either way, clear the
-`P3009` before the next merge. A release cancelled or timed out mid-migration
-leaves the same state.
+is resolved — including releases that touch no schema at all. Since this is the
+only deploy path git can trigger, one bad migration freezes every deploy until it
+is cleared, so clear the `P3009` before the next merge. A release cancelled or
+timed out mid-migration leaves the same state.
 
 So look at the database, decide whether the failed migration's DDL actually
 landed, and tell Prisma which of the two happened:
@@ -506,10 +501,9 @@ Step 4 is the last deploy you trigger from the Vercel side. After that a release
 is `.github/workflows/release.yml`: merge to `main`, CI passes, and the workflow
 applies migrations and then deploys — or `gh workflow run release.yml` to release
 by hand. Watch that workflow rather than the Vercel dashboard, because it is the
-thing that applies migrations. Vercel does still deploy `main` off its own git
-trigger for now, and will stop once `vercel.json` lands; see [Deploying schema
-changes](#deploying-schema-changes) for why it is not in the repo yet and what
-races until it is.
+thing that applies migrations. `vercel.json` disables Vercel's own git trigger for
+`main`, so a push no longer deploys on its own — see [Deploying schema
+changes](#deploying-schema-changes).
 
 `DATABASE_URL` is needed by the running app, not by the Vercel build — `next
 build` never touches the database. It is needed separately by GitHub Actions, in
