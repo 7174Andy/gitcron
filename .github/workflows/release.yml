@@ -1,5 +1,5 @@
-# The only path to production that applies migrations - and once vercel.json
-# lands (see below), the only one git can trigger at all.
+# The only path to production that applies migrations, and the only one git can
+# trigger at all - vercel.json disables Vercel's git trigger for main.
 #
 # Migrations used to run inside the Vercel build, in a script deleted with this
 # change. Ordering was correct there - Vercel promotes only after a successful
@@ -11,14 +11,14 @@
 # failed step ends the job, the deploy step simply never runs if it fails.
 # Vercel keeps serving the previous deployment, which is the safe direction.
 #
-# A vercel.json disabling Vercel's git trigger for main is NOT in the repo yet.
-# Until it is, Vercel also deploys main off the same push, in parallel with this
-# workflow, and the two race - the failure mode in issue #6, made intermittent.
-# That is deliberate and temporary: it leaves the git-triggered deploy as a
-# fallback while `vercel deploy --prod` from this workflow is still unproven, so
-# a first release that cannot deploy does not strand the project with no way to
-# ship. It must be added promptly, and no schema-changing merge should happen
-# before it is.
+# vercel.json is load-bearing, not cosmetic. Without it Vercel deploys main off
+# the same push, in parallel with this workflow, and the two race - the failure
+# mode in issue #6, made intermittent. Deleting it silently reopens that race,
+# and nothing in CI would catch it.
+#
+# It is also what makes this workflow the only way to deploy: if the deploy step
+# below stops working, there is no git-triggered fallback. Revert vercel.json to
+# get one back.
 name: Release
 
 on:
@@ -133,13 +133,11 @@ jobs:
           echo "A migration that failed part-way is recorded in"
           echo "_prisma_migrations with finished_at NULL, and every later"
           echo "'migrate deploy' aborts with P3009 until that is resolved -"
-          echo "including releases that touch no schema at all. Once"
-          echo "vercel.json lands and this is the only deploy path git can"
-          echo "trigger, one bad migration freezes every deploy. Until then it"
-          echo "is the worse way round: migrations stall here while Vercel keeps"
-          echo "deploying main off the same push, so code ships without them -"
-          echo "issue #6 exactly. Either way, clear this before the next merge."
-          echo "A cancelled or timed-out run mid-migration leaves the same state."
+          echo "including releases that touch no schema at all. Since this is"
+          echo "the only deploy path git can trigger, one bad migration freezes"
+          echo "every deploy until it is cleared - so clear it before the next"
+          echo "merge. A cancelled or timed-out run mid-migration leaves the"
+          echo "same state."
           echo
           echo "So check whether the DDL actually landed in the database, then"
           echo "tell Prisma which of the two happened:"
