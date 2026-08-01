@@ -40,6 +40,7 @@ model Schedule {
   runId         BigInt?
   runUrl        String?
   runConclusion String?   // GitHub's conclusion verbatim, or "unknown" when we gave up
+  ciGateProbe   String?   // TEMPORARY: proves the CI gate rejects an unmigrated schema change
 
   // GitHub access token for execution (encrypted in production)
   accessToken   String
