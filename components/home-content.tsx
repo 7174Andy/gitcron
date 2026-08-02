@@ -5,6 +5,7 @@ import { format } from "date-fns";
 import { toZonedTime } from "date-fns-tz";
 import { ScheduleForm } from "@/components/schedule/schedule-form";
 import { getSchedules, deleteSchedule, type ScheduleResponse } from "@/lib/actions/schedules";
+import { scheduleBucket } from "@/types/schedule";
 
 // The database only changes as fast as the cron tick that writes it (every
 // 1 minute), so polling faster than this buys nothing. Background tabs are
@@ -272,15 +273,19 @@ export function HomeContent() {
     })();
   }, [fetchSchedules]);
 
+  const bucketed: Record<ReturnType<typeof scheduleBucket>, ScheduleResponse[]> = {
+    scheduled: [],
+    running: [],
+    history: [],
+  };
+  for (const schedule of schedules) {
+    bucketed[scheduleBucket(schedule.status, schedule.runConclusion)].push(schedule);
+  }
+
   // Anything not in a terminal state can still change on its own, so keep
   // polling. A dashboard where every schedule has settled starts no timer and
   // issues no requests.
-  const isActive = schedules.some(
-    (schedule) =>
-      schedule.status === "pending" ||
-      schedule.status === "processing" ||
-      (schedule.status === "triggered" && schedule.runConclusion === null),
-  );
+  const isActive = bucketed.scheduled.length > 0 || bucketed.running.length > 0;
 
   useEffect(() => {
     if (!isActive) return;
@@ -311,9 +316,6 @@ export function HomeContent() {
     setIsModalOpen(false);
     setEditingSchedule(null);
   }
-
-  const pendingSchedules = schedules.filter((s) => s.status === "pending");
-  const completedSchedules = schedules.filter((s) => s.status !== "pending");
 
   if (isLoading) {
     return (
@@ -393,35 +395,36 @@ export function HomeContent() {
             </div>
           </div>
 
-          {pendingSchedules.length > 0 && (
-            <div className="flex flex-col gap-3">
-              <SectionHeader
-                label="Pending"
-                count={pendingSchedules.length}
-                isUpdating={isFetching}
-              />
-              <div className="flex flex-col gap-2">
-                {pendingSchedules.map((schedule) => (
-                  <ScheduleCard
-                    key={schedule.id}
-                    schedule={schedule}
-                    onDelete={handleScheduleDeleted}
-                    onEdit={handleEditSchedule}
-                  />
-                ))}
+          {(
+            [
+              ["Scheduled", bucketed.scheduled],
+              ["Running", bucketed.running],
+            ] as const
+          ).map(([label, items]) =>
+            items.length === 0 ? null : (
+              <div key={label} className="flex flex-col gap-3">
+                <SectionHeader label={label} count={items.length} isUpdating={isFetching} />
+                <div className="flex flex-col gap-2">
+                  {items.map((schedule) => (
+                    <ScheduleCard
+                      key={schedule.id}
+                      schedule={schedule}
+                      onDelete={handleScheduleDeleted}
+                      onEdit={handleEditSchedule}
+                    />
+                  ))}
+                </div>
               </div>
-            </div>
+            ),
           )}
 
-          {completedSchedules.length > 0 && (
-            <div className="flex flex-col gap-3">
-              <SectionHeader
-                label="History"
-                count={completedSchedules.length}
-                isUpdating={isFetching}
-              />
-              <div className="flex flex-col gap-2">
-                {completedSchedules.map((schedule) => (
+          {bucketed.history.length > 0 && (
+            <details>
+              <summary className="cursor-pointer text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                History ({bucketed.history.length})
+              </summary>
+              <div className="mt-3 flex flex-col gap-2">
+                {bucketed.history.map((schedule) => (
                   <ScheduleCard
                     key={schedule.id}
                     schedule={schedule}
@@ -430,7 +433,7 @@ export function HomeContent() {
                   />
                 ))}
               </div>
-            </div>
+            </details>
           )}
         </div>
       )}

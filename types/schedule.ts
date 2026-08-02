@@ -3,6 +3,19 @@
 // triggered / failed: terminal, non-editable
 export type ScheduleStatus = "pending" | "processing" | "triggered" | "failed";
 
+// Which dashboard section a schedule belongs to. "triggered" splits across
+// two: the GitHub run is still live until a conclusion comes back.
+export function scheduleBucket(
+  status: ScheduleStatus,
+  runConclusion: string | null,
+): "scheduled" | "running" | "history" {
+  if (status === "pending") return "scheduled";
+  if (status === "processing" || (status === "triggered" && runConclusion === null)) {
+    return "running";
+  }
+  return "history";
+}
+
 export interface ScheduleFormData {
   repository: string | null;
   workflow: string | null;
