@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
+    "cron:dev": "node scripts/cron-dev.mjs",
     "db:up": "docker compose -f docker/docker-compose.yml up -d --wait postgres",
     "db:down": "docker compose -f docker/docker-compose.yml stop postgres",
     "db:deploy": "node scripts/prisma.mjs migrate deploy",
