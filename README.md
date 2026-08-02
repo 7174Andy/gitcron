@@ -227,15 +227,22 @@ empty dropdown means the session exists but the token is unusable.
 
 ### 7. Test the cron endpoint
 
-Nothing schedules the cron locally, so trigger it yourself. This reads
-`CRON_SECRET` from `.env.local` rather than making you paste it:
+Nothing schedules the cron locally — production points cron-job.org at the
+deployed URL, and `vercel.json` declares no crons. So on localhost a due
+schedule stays `pending` indefinitely: `scheduledAt` is a `WHERE` filter in
+`getDueScheduleIds`, not a timer. Run the dispatcher yourself:
 
 ```bash
-SECRET=$(node -e 'require("dotenv").config({path:".env.local",quiet:true});process.stdout.write(process.env.CRON_SECRET)')
-curl -s -H "Authorization: Bearer $SECRET" http://localhost:3000/api/cron/execute
+npm run cron:dev
 ```
 
-With nothing due you get `{"message":"No schedules due",...}`. To exercise the
+It ticks immediately, then every 60s until Ctrl-C — production's cadence. So
+Ctrl-C after the first line gives you a single tick. It reads `CRON_SECRET`
+from `.env.local` (the same precedence Next uses) rather than making you paste
+it. If `.env` and `.env.local` hold different secrets, `.env.local` is the one
+the server loaded — a 401 says they disagree, and the script tells you so.
+
+Each tick prints one line, `processed 0` when nothing is due. To exercise the
 whole path, add a workflow to a repository you don't mind dispatching:
 
 ```yaml
@@ -249,18 +256,14 @@ jobs:
       - run: echo "dispatched at $(date -u)"
 ```
 
-Schedule it a couple of minutes out, then call the endpoint again — `triggered`
-becomes 1. Call it once more a minute later and the resolution pass fills in
-`runId`, `runUrl`, and `runConclusion`. `npm run db:studio` shows the rows.
+Schedule it a couple of minutes out and leave the loop running. The tick after
+`scheduledAt` passes reports `triggered 1`; a later one fills in `runId`,
+`runUrl`, and `runConclusion` via the resolution pass and reports `resolved 1`.
+`npm run db:studio` shows the rows.
 
-Or run a loop to imitate production:
-
-```bash
-while true; do
-  curl -s -H "Authorization: Bearer $SECRET" http://localhost:3000/api/cron/execute
-  sleep 60
-done
-```
+Override the target or cadence with `CRON_DEV_URL` and `CRON_DEV_INTERVAL_MS`.
+This calls the real dispatcher, so it dispatches real workflow runs against
+real repositories.
 
 ## Checks
 
