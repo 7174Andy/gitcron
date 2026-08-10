@@ -479,63 +479,6 @@ commit `prisma/migrations/`.
 **Port 5433 already in use.** Something else holds it — `npm run db:down`, or
 change the host side of the port mapping in `docker/docker-compose.yml`.
 
-## Deployment
-
-### Deploy to Vercel
-
-1. Push your code to GitHub
-2. Import the project in [Vercel](https://vercel.com)
-3. Add environment variables in Vercel dashboard:
-   - `AUTH_SECRET`
-   - `GITHUB_CLIENT_ID`
-   - `GITHUB_CLIENT_SECRET`
-   - `DATABASE_URL`
-   - `CRON_SECRET`
-   - `ENCRYPTION_KEY`
-4. Deploy
-5. Add the secrets `release.yml` needs, under **Settings → Environments** on the
-   GitHub repository, in an environment named `production` with deployment
-   branches restricted to `main`:
-   - `DATABASE_URL` — the production database, same value as in Vercel
-   - `VERCEL_TOKEN` — an account token from Vercel
-   - `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` — from the Vercel project settings
-
-Step 4 is the last deploy you trigger from the Vercel side. After that a release
-is `.github/workflows/release.yml`: merge to `main`, CI passes, and the workflow
-applies migrations and then deploys — or `gh workflow run release.yml` to release
-by hand. Watch that workflow rather than the Vercel dashboard, because it is the
-thing that applies migrations. `vercel.json` disables Vercel's own git trigger for
-`main`, so a push no longer deploys on its own — see [Deploying schema
-changes](#deploying-schema-changes).
-
-`DATABASE_URL` is needed by the running app, not by the Vercel build — `next
-build` never touches the database. It is needed separately by GitHub Actions, in
-the `production` environment above, because that is what `release.yml` uses to
-run `prisma migrate deploy` before each release, and what `schema-drift.yml` uses
-to check production daily.
-
-### Create a production GitHub OAuth App
-
-Register a **second** OAuth App for the deployed site rather than repointing your
-dev app — one app cannot hold both callback URLs, and editing it would break
-local sign-in for everyone using it:
-
-- **Application name:** GitCron
-- **Homepage URL:** `https://your-app.vercel.app`
-- **Authorization callback URL:** `https://your-app.vercel.app/api/auth/callback/github`
-
-Use this app's Client ID and Client Secret for the Vercel environment variables
-above. Your `.env.local` keeps the dev app's credentials.
-
-### Set up cron-job.org
-
-1. Sign up at [cron-job.org](https://cron-job.org) (free)
-2. Create a new cron job:
-   - **URL:** `https://your-app.vercel.app/api/cron/execute`
-   - **Schedule:** Every 1 minute
-   - **Headers:** `Authorization: Bearer YOUR_CRON_SECRET`
-3. Enable the cron job
-
 ## Usage
 
 1. **Sign in** with your GitHub account
